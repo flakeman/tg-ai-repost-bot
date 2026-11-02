@@ -19,10 +19,19 @@ class SqliteJobRepository(IJobRepository):
                     hashtags = json.loads(row["hashtags_json"])
                 except Exception:
                     hashtags = []
+
+            # Retrieve source_url
+            source_url = None
+            if "source_url" in row.keys() and row["source_url"]:
+                source_url = row["source_url"]
+            elif row["is_url"]:
+                source_url = row["source_input"]
+
             draft = PostContent(
                 title=row["rewritten_title"],
                 body=row["rewritten_body"],
                 hashtags=hashtags,
+                source_url=source_url,
             )
 
         image = None
@@ -64,14 +73,16 @@ class SqliteJobRepository(IJobRepository):
             image_prompt = job.image.prompt_used if job.image else None
             is_image_placeholder = 1 if (job.image and job.image.is_placeholder) else 0
 
+            source_url = job.draft.source_url if (job.draft and job.draft.source_url) else (job.source_input if job.is_url else None)
+
             await db.execute(
                 """
                 INSERT INTO publishing_jobs (
                     id, user_id, source_input, is_url, content_hash, tone,
                     extracted_title, extracted_body, rewritten_title, rewritten_body,
-                    hashtags_json, image_url, image_prompt, is_image_placeholder,
+                    hashtags_json, image_url, image_prompt, is_image_placeholder, source_url,
                     status, channel_message_id, error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id=excluded.user_id,
                     source_input=excluded.source_input,
@@ -86,6 +97,7 @@ class SqliteJobRepository(IJobRepository):
                     image_url=excluded.image_url,
                     image_prompt=excluded.image_prompt,
                     is_image_placeholder=excluded.is_image_placeholder,
+                    source_url=excluded.source_url,
                     status=excluded.status,
                     channel_message_id=excluded.channel_message_id,
                     error_message=excluded.error_message,
@@ -106,6 +118,7 @@ class SqliteJobRepository(IJobRepository):
                     image_url,
                     image_prompt,
                     is_image_placeholder,
+                    source_url,
                     job.status.value,
                     job.channel_message_id,
                     job.error_message,

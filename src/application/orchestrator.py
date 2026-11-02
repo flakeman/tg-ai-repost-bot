@@ -206,7 +206,8 @@ class PipelineOrchestrator:
         else:
             draft = await self.rewriter.rewrite(body, job.tone, title_hint=title_hint)
 
-        draft = self._enrich_hashtags(draft)
+        source_url = job.draft.source_url if (job.draft and job.draft.source_url) else (job.source_input if job.is_url else None)
+        draft = self._enrich_hashtags(draft, source_url=source_url)
         job.set_draft(draft)
         job.status = JobStatus.AWAITING_APPROVAL
         await self.repository.save(job)

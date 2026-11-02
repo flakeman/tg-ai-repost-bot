@@ -74,3 +74,25 @@ async def test_get_by_status(temp_repo):
     assert failed_jobs[0].id == job1.id
     assert len(pending_jobs) == 1
     assert pending_jobs[0].id == job2.id
+
+
+@pytest.mark.asyncio
+async def test_source_url_persistence(temp_repo):
+    job = PublishingJob.create(
+        user_id=123,
+        source_input="https://habr.com/ru/articles/1102922/",
+        tone=Tone.DYNAMIC,
+    )
+    draft = PostContent(
+        title="Заголовок",
+        body="Текст",
+        hashtags=["#tag"],
+        source_url="https://habr.com/ru/articles/1102922/",
+    )
+    job.set_draft(draft)
+    await temp_repo.save(job)
+
+    loaded = await temp_repo.get_by_id(job.id)
+    assert loaded is not None
+    assert loaded.draft is not None
+    assert loaded.draft.source_url == "https://habr.com/ru/articles/1102922/"

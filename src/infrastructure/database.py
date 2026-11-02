@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS publishing_jobs (
     image_url TEXT,
     image_prompt TEXT,
     is_image_placeholder BOOLEAN DEFAULT 0,
+    source_url TEXT,
     status TEXT NOT NULL,
     channel_message_id INTEGER,
     error_message TEXT,
@@ -38,4 +39,8 @@ async def init_db(db_path: str) -> None:
         os.makedirs(dirname, exist_ok=True)
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA_SQL)
+        cursor = await db.execute("PRAGMA table_info(publishing_jobs);")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "source_url" not in columns:
+            await db.execute("ALTER TABLE publishing_jobs ADD COLUMN source_url TEXT;")
         await db.commit()
