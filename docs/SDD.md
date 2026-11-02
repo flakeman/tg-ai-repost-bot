@@ -138,5 +138,5 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON publishing_jobs(status);
 - **Secrets Management:** Токены `BOT_TOKEN`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` хранятся исключительно в `.env` с правами доступа `600`.
 - **Access Control:** Доступ к боту ограничен списком `ADMIN_IDS`. Запросы от неавторизованных пользователей игнорируются.
 - **Sanitization & URL Defense:** Все входные URL валидируются на отсутствие непечатных ASCII-символов (`\n`, `\r`, пробелы) перед передачей в HTTP-клиент во избежание сбоев в `httpx`.
-- **Telegram Caption Overflow:** Защита от превышения лимита 1024 символов в подписи фото (автоматическое разделение на фото и текст).
+- **Telegram Caption & Message Overflow (ADR-009):** Защита от превышения лимита 1024 символов в подписи фото и 4096 символов в сообщениях Telegram. Текст автоматически разбивается на чанки (`split_telegram_message`) по границам параграфов (`\n\n`), а кнопки утверждения прикрепляются к финальному чанку. В системном промпте задано строгое ограничение на длину поста (600–1500 символов body, макс 1800 символов).
 - **SQLite Concurrency:** Включение WAL (Write-Ahead Logging) для предотвращения `database is locked`.

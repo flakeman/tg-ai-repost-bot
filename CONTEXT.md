@@ -29,15 +29,16 @@
    - `PipelineOrchestrator`: координация шагов конвейера, автоматическое обогащение постоянными хэштегами канала (`channel_hashtags`), сквозная передача `source_url`, дедупликация и модерационные операции (approve, regenerate_image, rewrite_text, reject).
 4. `src/presentation/`:
    - `keyboards.py`: инлайн-клавиатуры модерации и выбора тона.
-   - `publisher.py`: отправка постов (с фото через `FSInputFile` или только текст) в Telegram-канал с автоматическим разделением сообщений при длине подписи >1024 символов.
-   - `handlers.py`: хэндлеры команд `/start`, `/help`, `/tone`, приёма ссылок, пересланных сообщений (`forward_origin`), скрытых ссылок из `message.entities` (`text_link`) и интерактивных callback'ов одобрения.
+   - `publisher.py`: отправка постов (с фото через `FSInputFile` или только текст) в Telegram-канал с защитой от превышения лимитов Telegram (автоматическое разделение через `split_telegram_message`).
+   - `text_utils.py`: безопасное разбиение длинных сообщений по границам параграфов (`\n\n`), строк и пробелов.
+   - `handlers.py`: хэндлеры команд `/start`, `/help`, `/tone`, приёма ссылок, пересланных сообщений (`forward_origin`), скрытых ссылок из `message.entities` (`text_link`), превью в ЛС с безопасным чанкингом (кнопки прикрепляются к финальному фрагменту) и интерактивных callback'ов одобрения.
    - `main.py`: точка входа, конфигурация dependency injection, запуск бота с автоматическим удалением старых webhook перед стартом polling.
 5. `tests/`:
-   - 29 тестов (Unit, Integration, E2E), 100% пройдены.
+   - 37 тестов (Unit, Integration, E2E), 100% пройдены.
 6. Контейнеризация и процесс-менеджер:
    - `ecosystem.config.js` для PM2, `Dockerfile`, `docker-compose.yml`.
 
 ## 4. Current Status
 - Развернут на VPS `UPO` (`147.45.124.192`) под управлением PM2 (`tg-ai-repost-bot`).
 - Подключен шлюз `https://cheapvibecode.ru/v1` с моделями `gpt-5.6-terra` и `gpt-image-2`.
-- Все архитектурные решения зафиксированы в `docs/SDD.md`, `docs/DDD.md` и `docs/adr/ADR-001` - `ADR-008`.
+- Все архитектурные решения зафиксированы в `docs/SDD.md`, `docs/DDD.md` и `docs/adr/ADR-001` - `ADR-009`.

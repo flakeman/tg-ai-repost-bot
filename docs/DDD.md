@@ -107,4 +107,5 @@
   - `async def get_by_id(job_id: str) -> PublishingJob | None`
   - `async def get_by_hash(content_hash: str) -> PublishingJob | None`
   - `async def get_pending_jobs() -> list[PublishingJob]`
-- `IPublisher`: `async def publish_to_channel(channel_id: str, draft: PostContent, image: ImageAsset | None) -> int` (поддерживает `FSInputFile` для локальных файлов и URL для удаленных)
+- `IPublisher`: `async def publish_to_channel(channel_id: str, draft: PostContent, image: ImageAsset | None) -> int` (поддерживает `FSInputFile` для локальных файлов и URL для удаленных, с защитой от переполнения лимитов Telegram через чанкинг)
+- `split_telegram_message`: Domain/Presentation helper для деления текста на сообщения до 4000 символов по границам параграфов.

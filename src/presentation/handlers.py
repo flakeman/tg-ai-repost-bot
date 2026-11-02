@@ -7,6 +7,7 @@ from src.application.orchestrator import PipelineOrchestrator
 from src.config.settings import Settings
 from src.domain.models import Tone, PublishingJob
 from src.presentation.keyboards import build_approval_keyboard, build_tone_keyboard
+from src.presentation.text_utils import split_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
         if prompts_formatted:
             full_text += "\n\n<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
 
+    chunks = split_telegram_message(full_text, max_length=4000)
+
     if job.image and job.image.image_url and not job.image.is_placeholder:
         photo_target = get_photo_target(job.image.image_url)
         if len(full_text) <= 1024:
@@ -57,24 +60,22 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
                 parse_mode=ParseMode.HTML,
                 reply_markup=kb,
             )
-        else:
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=photo_target,
-            )
-            await bot.send_message(
-                chat_id=chat_id,
-                text=full_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb,
-                disable_web_page_preview=True,
-            )
-    else:
+            return
+
+        # If caption exceeds Telegram photo caption limit (1024 chars), send photo first
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=photo_target,
+        )
+
+    # Send text chunks sequentially, attaching keyboard to the last chunk
+    for i, chunk in enumerate(chunks):
+        is_last = (i == len(chunks) - 1)
         await bot.send_message(
             chat_id=chat_id,
-            text=full_text,
+            text=chunk,
             parse_mode=ParseMode.HTML,
-            reply_markup=kb,
+            reply_markup=kb if is_last else None,
             disable_web_page_preview=True,
         )
 

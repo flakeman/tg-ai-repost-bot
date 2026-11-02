@@ -5,6 +5,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import FSInputFile
 from src.domain.interfaces import IPublisher
 from src.domain.models import PostContent, ImageAsset
+from src.presentation.text_utils import split_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class TelegramPublisher(IPublisher):
         self, channel_id: str, draft: PostContent, image: Optional[ImageAsset] = None
     ) -> int:
         post_text = draft.render_post()
+        chunks = split_telegram_message(post_text, max_length=4000)
 
         # Check if valid image URL is available
         if image and image.image_url and not image.is_placeholder:
@@ -37,24 +39,30 @@ class TelegramPublisher(IPublisher):
                 )
                 return msg.message_id
             else:
-                # If text exceeds caption length, send photo first, then text
-                await self.bot.send_photo(
+                # If text exceeds caption length, send photo first, then text chunks
+                photo_msg = await self.bot.send_photo(
                     chat_id=channel_id,
                     photo=photo_target,
                 )
-                msg = await self.bot.send_message(
-                    chat_id=channel_id,
-                    text=post_text,
-                    parse_mode=ParseMode.HTML,
-                    disable_web_page_preview=True,
-                )
-                return msg.message_id
+                first_msg_id = photo_msg.message_id
+                for chunk in chunks:
+                    await self.bot.send_message(
+                        chat_id=channel_id,
+                        text=chunk,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True,
+                    )
+                return first_msg_id
 
         # Plain text post without image
-        msg = await self.bot.send_message(
-            chat_id=channel_id,
-            text=post_text,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
-        return msg.message_id
+        first_msg = None
+        for chunk in chunks:
+            msg = await self.bot.send_message(
+                chat_id=channel_id,
+                text=chunk,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+            if first_msg is None:
+                first_msg = msg
+        return first_msg.message_id if first_msg else 0
