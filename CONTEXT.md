@@ -15,7 +15,8 @@
 
 ## 3. Architecture & Implemented Components
 1. `src/domain/`:
-   - Модели: `PublishingJob`, `PostContent`, `ImageAsset`, `JobStatus`, `Tone`, `compute_content_hash`.
+   - Модели: `PublishingJob`, `PostContent`, `ImageAsset`, `JobStatus`, `Tone`, `compute_content_hash`, `normalize_hashtag`.
+   - Автоматическая нормализация, очистка и дедупликация хэштегов (замена тире на нижние подчеркивания, добавление символа `#`).
    - Доменные события: `src/domain/events.py`.
    - Порты интерфейсов: `IJobRepository`, `IArticleExtractor`, `ILLMRewriter`, `IImageGenerator`, `IPublisher`.
 2. `src/infrastructure/`:
@@ -24,7 +25,7 @@
    - `DeepSeekRewriter`, `OpenAIRewriter`, `CompositeRewriter`: адаптеры LLM с автоматическим резервным переключением (fallback).
    - `DalleImageGenerator`, `MockImageGenerator`: адаптеры генерации обложек с graceful degradation.
 3. `src/application/`:
-   - `PipelineOrchestrator`: координация шагов конвейера, управление статусами, дедупликация и модерационные операции (approve, regenerate_image, rewrite_text, reject).
+   - `PipelineOrchestrator`: координация шагов конвейера, автоматическое обогащение постоянными хэштегами канала (`channel_hashtags`), дедупликация и модерационные операции (approve, regenerate_image, rewrite_text, reject).
 4. `src/presentation/`:
    - `keyboards.py`: инлайн-клавиатуры модерации и выбора тона.
    - `publisher.py`: отправка постов (с фото или только текст) в Telegram-канал.
