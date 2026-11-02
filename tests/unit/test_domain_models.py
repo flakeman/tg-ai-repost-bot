@@ -54,6 +54,21 @@ def test_post_content_formatted_text():
     assert draft.image_prompts[0].startswith("🎨")
 
 
+def test_post_content_render_post_with_max_length():
+    huge_body = "Очень важное предложение о технологиях. " * 50  # ~2000 chars
+    draft = PostContent(
+        title="Заголовок новости",
+        body=huge_body,
+        hashtags=["#AI", "#Технологии", "#Новости"],
+        source_url="https://habr.com/ru/articles/855728/",
+    )
+    rendered = draft.render_post(max_length=1024)
+    assert len(rendered) <= 1024
+    assert "<b>Заголовок новости</b>" in rendered
+    assert "#AI #Технологии #Новости" in rendered
+    assert 'href="https://habr.com/ru/articles/855728/"' in rendered
+
+
 def test_publishing_job_is_url_sanitization():
     # URL with newlines or spaces must NOT be treated as a pure URL
     job_with_newline = PublishingJob.create(user_id=1, source_input="https://example.com/news\nhttps://example.com/2")

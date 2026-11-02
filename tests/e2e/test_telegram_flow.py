@@ -59,15 +59,13 @@ async def test_telegram_publisher_without_photo():
 
 
 @pytest.mark.asyncio
-async def test_telegram_publisher_long_post_chunking():
+async def test_telegram_publisher_with_photo_unified_caption():
     bot_mock = MagicMock()
     msg_photo = MagicMock()
     msg_photo.message_id = 901
-    msg_chunk = MagicMock()
-    msg_chunk.message_id = 902
 
     bot_mock.send_photo = AsyncMock(return_value=msg_photo)
-    bot_mock.send_message = AsyncMock(return_value=msg_chunk)
+    bot_mock.send_message = AsyncMock()
 
     publisher = TelegramPublisher(bot=bot_mock)
     long_body = "Очень длинная новость. " * 250  # ~6000 chars
@@ -77,27 +75,48 @@ async def test_telegram_publisher_long_post_chunking():
     msg_id = await publisher.publish_to_channel("@test_channel", draft, image=image)
     assert msg_id == 901
     bot_mock.send_photo.assert_called_once()
+    # Post must be in photo caption (unified message)
+    caption_sent = bot_mock.send_photo.call_args[1]["caption"]
+    assert len(caption_sent) <= 1024
+    assert "<b>Лонгрид</b>" in caption_sent
+    # No separate message sent
+    bot_mock.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_telegram_publisher_plain_text_long_chunking():
+    bot_mock = MagicMock()
+    msg_chunk = MagicMock()
+    msg_chunk.message_id = 902
+    bot_mock.send_message = AsyncMock(return_value=msg_chunk)
+
+    publisher = TelegramPublisher(bot=bot_mock)
+    long_body = "Текст лонгрида без фото. " * 250  # ~6000 chars
+    draft = PostContent(title="Лонгрид", body=long_body, hashtags=["#длиннопост"])
+
+    msg_id = await publisher.publish_to_channel("@test_channel", draft, image=None)
+    assert msg_id == 902
     assert bot_mock.send_message.call_count >= 2
 
 
 @pytest.mark.asyncio
-async def test_send_draft_preview_chunks_and_keyboard_at_end():
+async def test_send_draft_preview_unified_photo_caption_and_keyboard():
     from src.presentation.handlers import send_draft_preview
 
     bot_mock = MagicMock()
     bot_mock.send_photo = AsyncMock()
     bot_mock.send_message = AsyncMock()
 
-    long_body = "Параграф текста. " * 300  # ~5100 chars
+    long_body = "Параграф текста. " * 150
     draft = PostContent(
-        title="Огромный пост",
+        title="Единый пост с фото",
         body=long_body,
         hashtags=["#тест"],
         image_prompts=["🎨 Концепт 1", "📊 Концепт 2"]
     )
     job = PublishingJob.create(
         user_id=123,
-        source_input="https://example.com/long-article",
+        source_input="https://example.com/article",
         tone=Tone.DYNAMIC,
     )
     job.draft = draft
@@ -105,15 +124,15 @@ async def test_send_draft_preview_chunks_and_keyboard_at_end():
 
     await send_draft_preview(bot=bot_mock, chat_id=123, job=job)
 
-    # Photo is sent first because caption > 1024
+    # Photo is sent with post caption and keyboard together in ONE message
     bot_mock.send_photo.assert_called_once()
-    # Multiple chunks sent
-    assert bot_mock.send_message.call_count >= 2
+    photo_call = bot_mock.send_photo.call_args[1]
+    assert len(photo_call["caption"]) <= 1024
+    assert "<b>Единый пост с фото</b>" in photo_call["caption"]
+    assert photo_call["reply_markup"] is not None
 
-    # The last chunk must contain the approval keyboard
-    last_call = bot_mock.send_message.call_args_list[-1]
-    assert last_call[1]["reply_markup"] is not None
-
-    # Intermediate chunks must NOT contain keyboard
-    first_call = bot_mock.send_message.call_args_list[0]
-    assert first_call[1]["reply_markup"] is None
+    # Secondary message contains only the cover concept suggestions
+    bot_mock.send_message.assert_called_once()
+    msg_call = bot_mock.send_message.call_args[1]
+    assert "Варианты генерации обложки" in msg_call["text"]
+    assert msg_call.get("reply_markup") is None

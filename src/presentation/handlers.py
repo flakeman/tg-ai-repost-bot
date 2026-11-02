@@ -32,12 +32,43 @@ def is_authorized(user_id: int, settings: Settings) -> bool:
 async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None:
     """
     Sends interactive preview of the post to the author's direct messages.
+    If image exists, sends photo with caption and keyboard in ONE single message.
     """
-    text = job.draft.render_post() if job.draft else "Черновик не сформирован"
     kb = build_approval_keyboard(job.id)
 
-    prefix = "<b>📋 ПРЕДПРОСМОТР ПУБЛИКАЦИИ:</b>\n\n"
-    full_text = prefix + text
+    if job.image and job.image.image_url and not job.image.is_placeholder:
+        photo_target = get_photo_target(job.image.image_url)
+        post_caption = job.draft.render_post(max_length=1024) if job.draft else "Черновик не сформирован"
+
+        # Send photo and post text together in ONE message
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=photo_target,
+            caption=post_caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb,
+        )
+
+        # Send concept suggestions as a supplementary info message
+        if job.draft and job.draft.image_prompts:
+            prompts_formatted = []
+            for p in job.draft.image_prompts:
+                clean_p = p.strip()
+                if clean_p:
+                    prompts_formatted.append(clean_p if clean_p.startswith(("🎨", "📊", "📸", "⚡", "•", "1", "2", "3", "4")) else f"• {clean_p}")
+            if prompts_formatted:
+                prompts_text = "<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=prompts_text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+        return
+
+    # Text-only preview (no image)
+    text = job.draft.render_post() if job.draft else "Черновик не сформирован"
+    full_text = text
 
     if job.draft and job.draft.image_prompts:
         prompts_formatted = []
@@ -49,26 +80,6 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
             full_text += "\n\n<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
 
     chunks = split_telegram_message(full_text, max_length=4000)
-
-    if job.image and job.image.image_url and not job.image.is_placeholder:
-        photo_target = get_photo_target(job.image.image_url)
-        if len(full_text) <= 1024:
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=photo_target,
-                caption=full_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=kb,
-            )
-            return
-
-        # If caption exceeds Telegram photo caption limit (1024 chars), send photo first
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo_target,
-        )
-
-    # Send text chunks sequentially, attaching keyboard to the last chunk
     for i, chunk in enumerate(chunks):
         is_last = (i == len(chunks) - 1)
         await bot.send_message(

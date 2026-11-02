@@ -23,38 +23,22 @@ class TelegramPublisher(IPublisher):
     async def publish_to_channel(
         self, channel_id: str, draft: PostContent, image: Optional[ImageAsset] = None
     ) -> int:
-        post_text = draft.render_post()
-        chunks = split_telegram_message(post_text, max_length=4000)
-
         # Check if valid image URL is available
         if image and image.image_url and not image.is_placeholder:
             photo_target = get_photo_target(image.image_url)
-            # Telegram caption limit is 1024 characters
-            if len(post_text) <= 1024:
-                msg = await self.bot.send_photo(
-                    chat_id=channel_id,
-                    photo=photo_target,
-                    caption=post_text,
-                    parse_mode=ParseMode.HTML,
-                )
-                return msg.message_id
-            else:
-                # If text exceeds caption length, send photo first, then text chunks
-                photo_msg = await self.bot.send_photo(
-                    chat_id=channel_id,
-                    photo=photo_target,
-                )
-                first_msg_id = photo_msg.message_id
-                for chunk in chunks:
-                    await self.bot.send_message(
-                        chat_id=channel_id,
-                        text=chunk,
-                        parse_mode=ParseMode.HTML,
-                        disable_web_page_preview=True,
-                    )
-                return first_msg_id
+            # Ensure text fits Telegram 1024-character photo caption limit for unified message
+            caption_text = draft.render_post(max_length=1024)
+            msg = await self.bot.send_photo(
+                chat_id=channel_id,
+                photo=photo_target,
+                caption=caption_text,
+                parse_mode=ParseMode.HTML,
+            )
+            return msg.message_id
 
         # Plain text post without image
+        post_text = draft.render_post()
+        chunks = split_telegram_message(post_text, max_length=4000)
         first_msg = None
         for chunk in chunks:
             msg = await self.bot.send_message(

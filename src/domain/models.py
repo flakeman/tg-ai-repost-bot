@@ -100,14 +100,49 @@ class PostContent(BaseModel):
                 result.append(norm)
         return result
 
-    def render_post(self) -> str:
+    def render_post(self, max_length: Optional[int] = None) -> str:
         """
         Renders ready-to-publish Telegram HTML format.
+        If max_length is specified (e.g. 1024 for photo caption),
+        safely constrains the total length within the limit.
         """
         tags_str = " ".join(self.hashtags) if self.hashtags else ""
-        parts = [f"<b>{self.title.strip()}</b>", "", self.body.strip()]
-        if self.source_url:
-            parts.extend(["", f'<a href="{self.source_url}">🔗 Источник</a>'])
+        header = f"<b>{self.title.strip()}</b>"
+        source_part = f'<a href="{self.source_url}">🔗 Источник</a>' if self.source_url else ""
+        body_text = self.body.strip()
+
+        if max_length:
+            footer_parts = []
+            if source_part:
+                footer_parts.extend(["", source_part])
+            if tags_str:
+                footer_parts.extend(["", tags_str])
+            footer_text = "\n".join(footer_parts)
+
+            # overhead: header + newline + footer
+            overhead = len(header) + 1 + len(footer_text)
+            if overhead + len(body_text) > max_length:
+                max_body = max_length - overhead - 4
+                if max_body > 50:
+                    truncated = body_text[:max_body]
+                    last_punct = max(
+                        truncated.rfind(". "),
+                        truncated.rfind("! "),
+                        truncated.rfind("? "),
+                        truncated.rfind("\n"),
+                    )
+                    if last_punct > max_body // 2:
+                        body_text = truncated[:last_punct + 1]
+                    else:
+                        last_space = truncated.rfind(" ")
+                        if last_space > max_body // 2:
+                            body_text = truncated[:last_space] + "..."
+                        else:
+                            body_text = truncated + "..."
+
+        parts = [header, "", body_text]
+        if source_part:
+            parts.extend(["", source_part])
         if tags_str:
             parts.extend(["", tags_str])
         return "\n".join(parts)
