@@ -1,0 +1,106 @@
+# Domain-Driven Design (DDD) Specification
+
+## 1. Ubiquitous Language (Единый язык предметной области)
+- **Source Material (Исходный материал):** Входящая ссылка (URL) или произвольный текст, передаваемый пользователем боту.
+- **Content Hash (Хэш контента):** Детерминированный хэш (SHA-256) нормализованного URL или тела статьи для защиты от повторной обработки (дедупликация).
+- **Article (Статья):** Извлеченная и очищенная сущность с заголовком (`title`), основным телом текста (`body`), автором/источником и датой.
+- **Tone (Тон рерайта):** Стиль адаптации контента (`formal`, `casual`, `dynamic`, `humorous`, `analytical`).
+- **Post Draft (Черновик поста):** Сформированный пост, содержащий заголовок, адаптированный текст, сгенерированные хэштеги и опциональное изображение.
+- **Image Asset (Визуальный аспект):** Изображение, сгенерированное по промпту из текста (URL или локальный путь), либо заглушка.
+- **Approval Gate (Шлюз утверждения):** Интерактивный этап в ЛС автора с кнопками «Опубликовать», «Переписать текст», «Перегенерировать картинку», «Отклонить».
+- **Publishing Job (Задача публикации):** Агрегат конвейера, управляющий жизненным циклом и статусами обработки задачи.
+- **Job Status (Статус задачи):** `PENDING` → `EXTRACTING` → `REWRITING` → `GENERATING_IMAGE` → `AWAITING_APPROVAL` → `PUBLISHING` → `PUBLISHED` / `REJECTED` / `FAILED`.
+
+---
+
+## 2. Bounded Contexts (Ограниченные контексты)
+
+```
++-----------------------------------------------------------------------------------+
+|                            Ingestion & Dedup Context                              |
+|  - Validates input (URL vs raw text)                                              |
+|  - Computes ContentHash and queries Repository for duplicates                     |
++-----------------------------------------------------------------------------------+
+                                        │
+                                        ▼
++-----------------------------------------------------------------------------------+
+|                            Extraction Context                                     |
+|  - Fetches web page content, cleans boilerplates, extracts title & body           |
++-----------------------------------------------------------------------------------+
+                                        │
+                                        ▼
++-----------------------------------------------------------------------------------+
+|                            Synthesis & AI Context                                 |
+|  - Rewriting: Formulates dynamic post with facts & hashtags                       |
+|  - Image Generation: Derives visual prompt & generates cover image                |
+|  - Fallback logic: Provider switching if primary fails                            |
++-----------------------------------------------------------------------------------+
+                                        │
+                                        ▼
++-----------------------------------------------------------------------------------+
+|                            Moderation & Publishing Context                        |
+|  - Previews post in Telegram DM to Channel Owner                                  |
+|  - Handles interactive callbacks (Approve, Regenerate Image, Rewrite, Reject)     |
+|  - Dispatches final post to target Telegram Channel                               |
++-----------------------------------------------------------------------------------+
+```
+
+---
+
+## 3. Aggregates, Entities & Value Objects
+
+### 3.1 Value Objects
+- `JobId`: Уникальный идентификатор задачи (UUID4).
+- `ContentHash`: SHA-256 хэш нормализованного URL или очищенного текста.
+- `Tone`: Enum (`FORMAL`, `CASUAL`, `DYNAMIC`, `HUMOROUS`, `ANALYTICAL`).
+- `JobStatus`: Enum состояний конвейера.
+- `PostContent`: Неизменяемый объект с полями `title: str`, `body: str`, `hashtags: list[str]`.
+- `ImageAsset`: Неизменяемый объект с полями `image_url: str | None`, `prompt_used: str | None`, `is_placeholder: bool`.
+
+### 3.2 Aggregate Root: `PublishingJob`
+- **ID:** `JobId`
+- **Fields:**
+  - `user_id: int` (Telegram ID автора)
+  - `source_input: str` (исходный URL или текст)
+  - `is_url: bool`
+  - `content_hash: ContentHash`
+  - `tone: Tone`
+  - `extracted_title: str | None`
+  - `extracted_body: str | None`
+  - `draft: PostContent | None`
+  - `image: ImageAsset | None`
+  - `status: JobStatus`
+  - `channel_message_id: int | None`
+  - `error_message: str | None`
+  - `created_at: datetime`
+  - `updated_at: datetime`
+- **Invariants:**
+  - Нельзя перевести в `AWAITING_APPROVAL` без готового `draft`.
+  - Нельзя перевести в `PUBLISHED` без явного вызова метода `approve()`.
+  - Если генерация картинки падает с ошибкой, агрегат сохраняет `image = None` и флаг предупреждения, позволяя продолжить публикацию только текста.
+
+---
+
+## 4. Domain Events
+- `JobCreatedEvent(job_id, user_id, content_hash)`
+- `ArticleExtractedEvent(job_id, title, body_length)`
+- `ContentRewrittenEvent(job_id, draft)`
+- `ImageGeneratedEvent(job_id, image_url)`
+- `AwaitingApprovalEvent(job_id, draft, image)`
+- `JobApprovedEvent(job_id, user_id)`
+- `JobRegenerateRequestedEvent(job_id, target: "text" | "image")`
+- `JobPublishedEvent(job_id, channel_message_id)`
+- `JobFailedEvent(job_id, reason)`
+
+---
+
+## 5. Domain Interfaces (Ports)
+- `IArticleExtractor`: `async def extract(url: str) -> tuple[str, str]` (title, body)
+- `ILLMRewriter`: `async def rewrite(raw_text: str, tone: Tone) -> PostContent`
+- `IImageGenerator`: `async def generate(prompt: str) -> ImageAsset`
+- `IJobRepository`:
+  - `async def save(job: PublishingJob) -> None`
+  - `async def get_by_id(job_id: str) -> PublishingJob | None`
+  - `async def get_by_hash(content_hash: str) -> PublishingJob | None`
+  - `async def get_pending_jobs() -> list[PublishingJob]`
+- `IPublisher`: `async def publish_to_channel(channel_id: str, draft: PostContent, image: ImageAsset | None) -> int`
