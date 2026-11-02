@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # Telegram Bot
     bot_token: str = Field(..., description="Telegram Bot Token from @BotFather")
     channel_id: str = Field(..., description="Telegram Channel ID or username (e.g. @mychannel or -100...)")
-    admin_ids: List[int] = Field(default_factory=list, description="List of authorized admin user IDs")
+    admin_ids: Union[List[int], str] = Field(default_factory=list, description="List of authorized admin user IDs")
 
     # Storage
     db_path: str = Field(default="storage/bot.db", description="Path to SQLite database file")
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     default_tone: str = Field(default="dynamic", description="Default rewriting tone: casual, formal, dynamic")
 
     # Channel Fixed Hashtags (appended to every post)
-    channel_hashtags: List[str] = Field(
+    channel_hashtags: Union[List[str], str] = Field(
         default_factory=list,
         description="List of fixed channel hashtags (e.g. #news, #tech)"
     )
