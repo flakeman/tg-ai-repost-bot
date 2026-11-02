@@ -68,6 +68,7 @@ def build_orchestrator(settings: Settings, bot: Bot) -> PipelineOrchestrator:
             api_key=settings.openai_api_key,
             model=settings.dalle_model,
             style_modifier=settings.image_style,
+            client=openai_llm.client,
         )
     else:
         image_gen = MockImageGenerator()

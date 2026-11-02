@@ -2,7 +2,7 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from src.application.orchestrator import PipelineOrchestrator
 from src.config.settings import Settings
 from src.domain.models import Tone, PublishingJob
@@ -14,6 +14,12 @@ router = Router(name="main_router")
 
 # Global session tone memory for the user (in-memory default)
 _user_tones: dict[int, Tone] = {}
+
+
+def get_photo_target(image_path_or_url: str):
+    if image_path_or_url.startswith("http://") or image_path_or_url.startswith("https://"):
+        return image_path_or_url
+    return FSInputFile(image_path_or_url)
 
 
 def is_authorized(user_id: int, settings: Settings) -> bool:
@@ -42,10 +48,11 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
             full_text += "\n\n<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
 
     if job.image and job.image.image_url and not job.image.is_placeholder:
+        photo_target = get_photo_target(job.image.image_url)
         if len(full_text) <= 1024:
             await bot.send_photo(
                 chat_id=chat_id,
-                photo=job.image.image_url,
+                photo=photo_target,
                 caption=full_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=kb,
@@ -53,7 +60,7 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
         else:
             await bot.send_photo(
                 chat_id=chat_id,
-                photo=job.image.image_url,
+                photo=photo_target,
             )
             await bot.send_message(
                 chat_id=chat_id,
@@ -149,6 +156,34 @@ async def handle_incoming_content(
         return
 
     content = (message.text or message.caption or "").strip()
+
+    # Detect any URLs embedded inside text entities or forwarded channel origin
+    entities = (message.entities or []) + (message.caption_entities or [])
+    for ent in entities:
+        if ent.type == "text_link" and ent.url:
+            content = f"{ent.url}\n{content}"
+            break
+        elif ent.type == "url":
+            raw_text = message.text or message.caption or ""
+            url_part = raw_text[ent.offset : ent.offset + ent.length].strip()
+            if url_part:
+                content = f"{url_part}\n{content}"
+                break
+    else:
+        # Check forwarded channel message
+        if getattr(message, "forward_origin", None):
+            origin = message.forward_origin
+            if getattr(origin, "type", None) == "channel" and getattr(origin, "chat", None):
+                chat = origin.chat
+                msg_id = getattr(origin, "message_id", None)
+                if getattr(chat, "username", None) and msg_id:
+                    content = f"https://t.me/{chat.username}/{msg_id}\n{content}"
+        elif getattr(message, "forward_from_chat", None):
+            chat = message.forward_from_chat
+            msg_id = getattr(message, "forward_from_message_id", None)
+            if getattr(chat, "username", None) and msg_id:
+                content = f"https://t.me/{chat.username}/{msg_id}\n{content}"
+
     active_tone = _user_tones.get(user_id, Tone(settings.default_tone))
 
     # Ingestion & Dedup check
