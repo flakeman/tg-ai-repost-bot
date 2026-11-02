@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     # LLM Settings
     openai_api_key: str = Field(default="", description="OpenAI API Key")
+    openai_base_url: str = Field(default="https://api.openai.com/v1", description="OpenAI API base URL")
     deepseek_api_key: str = Field(default="", description="DeepSeek API Key")
     primary_llm_provider: str = Field(default="deepseek", description="primary provider: deepseek or openai")
     fallback_llm_provider: str = Field(default="openai", description="fallback provider")

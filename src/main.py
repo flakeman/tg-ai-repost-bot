@@ -50,6 +50,7 @@ def build_orchestrator(settings: Settings, bot: Bot) -> PipelineOrchestrator:
     openai_llm = OpenAIRewriter(
         api_key=settings.openai_api_key or "unused",
         model=settings.openai_model,
+        base_url=settings.openai_base_url,
     )
 
     if settings.primary_llm_provider == "deepseek" and settings.deepseek_api_key:
