@@ -8,6 +8,7 @@ def test_settings_default_values():
         bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
         channel_id="@my_test_channel",
         admin_ids=[12345678],
+        _env_file=None,
     )
     assert settings.bot_token == "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
     assert settings.channel_id == "@my_test_channel"
@@ -28,6 +29,7 @@ def test_settings_admin_ids_parsing_from_csv():
         bot_token="test_token",
         channel_id="@channel",
         admin_ids="100,200,300",
+        _env_file=None,
     )
     assert settings.admin_ids == [100, 200, 300]
 
@@ -37,6 +39,7 @@ def test_settings_channel_hashtags_parsing():
         bot_token="test_token",
         channel_id="https://t.me/etoitnovosti",
         channel_hashtags="#новости, tech, #новости, ai-news",
+        _env_file=None,
     )
     assert settings.channel_id == "@etoitnovosti"
     assert settings.channel_hashtags == ["#новости", "#tech", "#ai_news"]
