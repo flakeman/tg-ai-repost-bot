@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 from typing import List, Optional, Tuple
 from src.domain.interfaces import (
@@ -7,7 +8,7 @@ from src.domain.interfaces import (
     IImageGenerator,
     IPublisher,
 )
-from src.domain.models import PublishingJob, Tone, JobStatus, compute_content_hash, ImageAsset
+from src.domain.models import PublishingJob, Tone, JobStatus, compute_content_hash, ImageAsset, PostContent
 
 logger = logging.getLogger(__name__)
 
