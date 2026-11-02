@@ -20,7 +20,7 @@ def test_settings_default_values():
 
 def test_settings_validation_missing_required():
     with pytest.raises(ValidationError):
-        Settings()
+        Settings(_env_file=None)
 
 
 def test_settings_admin_ids_parsing_from_csv():
