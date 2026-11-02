@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from src.domain.interfaces import (
     IJobRepository,
     IArticleExtractor,
