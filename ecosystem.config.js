@@ -7,7 +7,7 @@ module.exports = {
     interpreter: 'none',
     autorestart: true,
     watch: false,
-    max_memory_restart: '150M',
+    max_memory_restart: '400M',
     env: {
       PYTHONUNBUFFERED: '1'
     }
