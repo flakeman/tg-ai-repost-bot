@@ -155,34 +155,42 @@ async def handle_incoming_content(
         await message.answer("⛔ Доступ ограничен.")
         return
 
-    content = (message.text or message.caption or "").strip()
+    raw_content = (message.text or message.caption or "").strip()
+    target_url = None
 
     # Detect any URLs embedded inside text entities or forwarded channel origin
     entities = (message.entities or []) + (message.caption_entities or [])
     for ent in entities:
         if ent.type == "text_link" and ent.url:
-            content = f"{ent.url}\n{content}"
+            target_url = ent.url.strip()
             break
         elif ent.type == "url":
-            raw_text = message.text or message.caption or ""
-            url_part = raw_text[ent.offset : ent.offset + ent.length].strip()
+            url_part = raw_content[ent.offset : ent.offset + ent.length].strip()
             if url_part:
-                content = f"{url_part}\n{content}"
+                target_url = url_part
                 break
-    else:
-        # Check forwarded channel message
+
+    if not target_url:
         if getattr(message, "forward_origin", None):
             origin = message.forward_origin
             if getattr(origin, "type", None) == "channel" and getattr(origin, "chat", None):
                 chat = origin.chat
                 msg_id = getattr(origin, "message_id", None)
                 if getattr(chat, "username", None) and msg_id:
-                    content = f"https://t.me/{chat.username}/{msg_id}\n{content}"
+                    target_url = f"https://t.me/{chat.username}/{msg_id}"
         elif getattr(message, "forward_from_chat", None):
             chat = message.forward_from_chat
             msg_id = getattr(message, "forward_from_message_id", None)
             if getattr(chat, "username", None) and msg_id:
-                content = f"https://t.me/{chat.username}/{msg_id}\n{content}"
+                target_url = f"https://t.me/{chat.username}/{msg_id}"
+
+    # If URL is the sole content or user forwarded a short post with a URL
+    if target_url and (raw_content == target_url or not raw_content or len(raw_content) < 150):
+        content = target_url
+    elif target_url:
+        content = f"{target_url} {raw_content}"
+    else:
+        content = raw_content
 
     active_tone = _user_tones.get(user_id, Tone(settings.default_tone))
 

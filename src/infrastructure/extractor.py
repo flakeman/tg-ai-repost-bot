@@ -29,6 +29,14 @@ class TrafilaturaExtractor(IArticleExtractor):
         return title, body
 
     async def extract_with_url(self, url: str) -> Tuple[str, str, str]:
+        url = url.strip()
+        # Ensure url does not contain trailing whitespace or newlines
+        if any(c in url for c in " \t\r\n"):
+            for part in url.split():
+                if part.startswith("http://") or part.startswith("https://"):
+                    url = part.strip()
+                    break
+
         # Handle Telegram post links: e.g. https://t.me/channel/123
         tg_match = re.search(r"t\.me/([^/]+)/(\d+)", url)
         if tg_match and tg_match.group(1).lower() not in ("joinchat", "addstickers", "c"):

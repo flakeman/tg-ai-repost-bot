@@ -139,7 +139,7 @@ class PublishingJob(BaseModel):
     @classmethod
     def create(cls, user_id: int, source_input: str, tone: Tone = Tone.DYNAMIC) -> PublishingJob:
         stripped = source_input.strip()
-        is_url = stripped.startswith("http://") or stripped.startswith("https://")
+        is_url = (stripped.startswith("http://") or stripped.startswith("https://")) and not any(c in stripped for c in " \t\r\n")
         c_hash = compute_content_hash(stripped)
         return cls(
             user_id=user_id,
