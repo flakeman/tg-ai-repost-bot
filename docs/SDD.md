@@ -58,24 +58,26 @@
 ```
 
 ### 3.2 Technology Stack
-- **Language:** Python 3.14.3
+- **Language:** Python 3.12+ / 3.14+
 - **Bot Framework:** aiogram 3.17+
 - **Database:** SQLite 3 with WAL mode via `aiosqlite`
-- **AI Clients:** OpenAI SDK (DeepSeek API and OpenAI endpoints)
-- **Scraper:** `trafilatura` + `httpx` + `beautifulsoup4`
-- **Testing:** `pytest`, `pytest-asyncio`, `pytest-mock`
+- **AI Clients:** OpenAI SDK (OpenAI API, DeepSeek API, and OpenAI-compatible gateways like `cheapvibecode.ru`)
+- **Scraper:** `trafilatura` + `httpx` + `beautifulsoup4` (с поддержкой встраиваемых Telegram-виджетов `?embed=1` и резолва внешних первоисточников)
+- **Image Generation & Storage:** `gpt-image-2` / DALL-E 3 с поддержкой декодирования `b64_json` и локальным файловым хранилищем `storage/images/`
+- **Testing:** `pytest`, `pytest-asyncio`, `pytest-mock` (29 тестов: unit, integration, e2e)
 
 ---
 
 ## 4. API & Interaction Specification
-### 4.1 Telegram Bot Commands
+### 4.1 Telegram Bot Commands & Content Ingestion
 - `/start` - Приветствие и справка по работе.
 - `/help` - Инструкция по командам и доступным стилям рерайта.
-- `/rewrite [tone]` - Запуск обработки с явным выбором стиля (`casual`, `formal`, `dynamic`).
-- `[URL]` или `[Текст]` - Автоматическое распознавание ссылки или текста и постановка в очередь.
+- `/tone` - Выбор желаемого стиля рерайта (`casual`, `formal`, `dynamic`, `humorous`, `analytical`).
+- `[URL]` или `[Текст]` - Автоматическое распознавание ссылки или текста и постановка в конвейер.
+- **Telegram Posts & Forwards:** Автоматическое извлечение ссылок из `message.entities` (`text_link`) и `message.forward_origin`, резолв исходного канала и статьи-первоисточника.
 
 ### 4.2 Interactive Inline Keyboard Actions
-- `cb:approve:{job_id}` - Утвердить пост и немедленно опубликовать в канал.
+- `cb:approve:{job_id}` - Утвердить пост и немедленно опубликовать в целевую группу/канал.
 - `cb:regen_img:{job_id}` - Перегенерировать изображение по новому запросу/стилю.
 - `cb:regen_text:{job_id}` - Переписать текст заново.
 - `cb:reject:{job_id}` - Отклонить черновик и отменить публикацию.
@@ -115,25 +117,26 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON publishing_jobs(status);
 
 ## 6. Workflows & State Machine
 ### 6.1 Happy Path Flow
-1. Пользователь присылает ссылку или текст боту.
-2. Бот вычисляет SHA-256 `content_hash`. Если запись уже существует — уведомляет пользователя о дубликате.
-3. Бот создает `PublishingJob` в статусе `PENDING` и немедленно отправляет ответ: *"Принял в работу. Обрабатываю..."*.
-4. **Extractor** извлекает чистый заголовок и тело статьи (статус `EXTRACTING`).
-5. **Rewriter** отправляет промпт в DeepSeek/OpenAI, получая структуру: Заголовок, Тело, Хэштеги (статус `REWRITING`).
-6. **Image Generator** синтезирует изображение на основе полученного текста (статус `GENERATING_IMAGE`).
-7. Бот переходит в статус `AWAITING_APPROVAL` и присылает готовый черновик с картинкой и кнопками в ЛС автору.
-8. Автор нажимает «Опубликовать».
-9. Бот публикует фото с подписью в канал, переводит задачу в `PUBLISHED` и редактирует сообщение в ЛС с подтверждением.
+1. Пользователь присылает ссылку (веб-сайт или `t.me/...`), пересылает сообщение из канала или вставляет текст.
+2. Бот санирует входные данные (удаляет переводы строк из URL), вычисляет SHA-256 `content_hash`. Если запись уже существует — уведомляет о дубликате.
+3. Бот создает `PublishingJob` в статусе `PENDING` и немедленно отправляет ответ: *"⏳ Принял в работу!"*.
+4. **Extractor** извлекает чистый заголовок и тело статьи (статус `EXTRACTING`). При наличии ссылки на Telegram-пост экстрактор считывает виджет, находит первоисточник (Хабр и др.) и скачивает полный текст оригинальной статьи.
+5. **Rewriter** отправляет промпт через настроенный шлюз (`cheapvibecode.ru` / OpenAI / DeepSeek), получая: Заголовок, Тело, Хэштеги и 4 креативных варианта обложки (статус `REWRITING`).
+6. **Image Generator** синтезирует изображение через `gpt-image-2` / DALL-E 3 (статус `GENERATING_IMAGE`), сохраняет файл локально в `storage/images/`.
+7. Бот переходит в статус `AWAITING_APPROVAL` и присылает готовый черновик с картинкой, кнопками и 4 вариантами концептов обложки в ЛС автору.
+8. Автор нажимает «🚀 Опубликовать».
+9. Бот публикует фото с подписью (или раздельными сообщениями при длине >1024 символов) в канал/группу, переводит задачу в `PUBLISHED` и подтверждает публикацию.
 
 ### 6.2 Error & Fallback Scenarios
 - **Сбой парсинга URL:** Если `trafilatura` не смогла распарсить страницу, используется fallback на `BeautifulSoup`. При невозможности извлечь текст бот возвращает понятную ошибку и предлагает прислать скопированный текст.
-- **Сбой основного LLM API (DeepSeek Timeout/500):** Автоматический fallback на резервный провайдер (OpenAI GPT-4o-mini).
-- **Сбой Image API:** Бот логирует ошибку, генерирует черновик без изображения (или с плейсхолдером) и сообщает автору: *"Не удалось сгенерировать обложку, пост готов в текстовом формате"*.
+- **Сбой основного LLM API (Timeout/500/401):** Автоматический fallback на резервный провайдер через `CompositeRewriter`.
+- **Сбой Image API:** Бот логирует ошибку, генерирует черновик без изображения, сохраняя в сообщении предпросмотра 4 варианта идей для обложки, и позволяет опубликовать текст.
 
 ---
 
 ## 7. Security & Non-Functional Requirements
-- **Secrets Management:** Токены `BOT_TOKEN`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `TARGET_CHANNEL_ID` хранятся исключительно в `.env` (не коммитятся в git).
-- **Access Control:** Доступ к командам бота и шлюзу одобрения ограничен списком `ALLOWED_USER_IDS`. Любые запросы от посторонних пользователей отклоняются.
-- **Sanitization:** Текст экранируется согласно спецификации Telegram MarkdownV2 / HTML во избежание синтаксических ошибок публикации.
-- **SQLite Concurrency:** Включение WAL (Write-Ahead Logging) и занятость таймаута для предотвращения `database is locked`.
+- **Secrets Management:** Токены `BOT_TOKEN`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` хранятся исключительно в `.env` с правами доступа `600`.
+- **Access Control:** Доступ к боту ограничен списком `ADMIN_IDS`. Запросы от неавторизованных пользователей игнорируются.
+- **Sanitization & URL Defense:** Все входные URL валидируются на отсутствие непечатных ASCII-символов (`\n`, `\r`, пробелы) перед передачей в HTTP-клиент во избежание сбоев в `httpx`.
+- **Telegram Caption Overflow:** Защита от превышения лимита 1024 символов в подписи фото (автоматическое разделение на фото и текст).
+- **SQLite Concurrency:** Включение WAL (Write-Ahead Logging) для предотвращения `database is locked`.

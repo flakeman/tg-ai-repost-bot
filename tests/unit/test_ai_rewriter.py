@@ -25,6 +25,7 @@ async def test_openai_rewriter_success():
         "body": "Компания представила процессор нового поколения с удвоенной энергоэффективностью.",
         "hashtags": ["#AI", "#Hardware"],
         "image_prompt": "futuristic quantum microchip glowing with blue neon lights",
+        "image_prompts": ["🎨 3D-рендер: микрочип в изометрии", "📸 Фото: лаборатория"],
     })
     client_mock.chat.completions.create = AsyncMock(return_value=MagicMock(choices=[mock_choice]))
 
@@ -35,6 +36,25 @@ async def test_openai_rewriter_success():
     assert "удвоенной энергоэффективностью" in draft.body
     assert draft.hashtags == ["#AI", "#Hardware"]
     assert img_prompt == "futuristic quantum microchip glowing with blue neon lights"
+    assert len(draft.image_prompts) == 2
+
+
+@pytest.mark.asyncio
+async def test_dalle_image_generator_b64_json(tmp_path):
+    import base64
+    client_mock = MagicMock()
+    # 1x1 transparent PNG in base64
+    tiny_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    mock_item = MagicMock(url=None, b64_json=tiny_b64)
+    client_mock.images.generate = AsyncMock(return_value=MagicMock(data=[mock_item]))
+
+    img_dir = str(tmp_path / "images")
+    gen = DalleImageGenerator(api_key="key", model="gpt-image-2", client=client_mock, images_dir=img_dir)
+    asset = await gen.generate("Test prompt")
+
+    assert asset.is_placeholder is False
+    assert asset.image_url is not None
+    assert asset.image_url.endswith(".png")
 
 
 @pytest.mark.asyncio

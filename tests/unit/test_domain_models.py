@@ -43,11 +43,24 @@ def test_post_content_formatted_text():
         title="Новый прорыв в ИИ",
         body="Исследователи представили новую модель нейросетей.",
         hashtags=["#AI", "#Tech", "#News"],
+        source_url="https://habr.com/ru/articles/123/",
+        image_prompts=["🎨 3D-рендер: футуристичная сцена"],
     )
     formatted = draft.render_post()
     assert "<b>Новый прорыв в ИИ</b>" in formatted
     assert "Исследователи представили новую модель" in formatted
+    assert 'href="https://habr.com/ru/articles/123/"' in formatted
     assert "#AI #Tech #News" in formatted
+    assert draft.image_prompts[0].startswith("🎨")
+
+
+def test_publishing_job_is_url_sanitization():
+    # URL with newlines or spaces must NOT be treated as a pure URL
+    job_with_newline = PublishingJob.create(user_id=1, source_input="https://example.com/news\nhttps://example.com/2")
+    assert job_with_newline.is_url is False
+
+    job_clean_url = PublishingJob.create(user_id=1, source_input="https://example.com/clean/url")
+    assert job_clean_url.is_url is True
 
 
 def test_publishing_job_lifecycle():

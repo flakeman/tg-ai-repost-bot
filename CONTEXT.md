@@ -16,25 +16,28 @@
 ## 3. Architecture & Implemented Components
 1. `src/domain/`:
    - Модели: `PublishingJob`, `PostContent`, `ImageAsset`, `JobStatus`, `Tone`, `compute_content_hash`, `normalize_hashtag`.
-   - Автоматическая нормализация, очистка и дедупликация хэштегов (замена тире на нижние подчеркивания, добавление символа `#`).
+   - `PostContent` включает `source_url` (ссылка на первоисточник) и `image_prompts` (4 концепта визуалов).
+   - Строгая санитизация `is_valid_url` (защита от переносов строк и ASCII инъекций).
    - Доменные события: `src/domain/events.py`.
    - Порты интерфейсов: `IJobRepository`, `IArticleExtractor`, `ILLMRewriter`, `IImageGenerator`, `IPublisher`.
 2. `src/infrastructure/`:
-   - `SqliteJobRepository` + `init_db`: персистентность задач и дедупликация по SHA-256 хэшу.
-   - `TrafilaturaExtractor`: парсер статей с фоллбэком на BeautifulSoup и очисткой мусора.
-   - `DeepSeekRewriter`, `OpenAIRewriter`, `CompositeRewriter`: адаптеры LLM с автоматическим резервным переключением (fallback).
-   - `DalleImageGenerator`, `MockImageGenerator`: адаптеры генерации обложек с graceful degradation.
+   - `SqliteJobRepository` + `init_db`: персистентность задач и дедупликация по SHA-256 хэшу в режиме WAL.
+   - `TrafilaturaExtractor`: парсер статей с поддержкой разворачивания `t.me/<channel>/<id>` через встроенные виджеты (`?embed=1`), парсингом ссылок на первоисточник (Хабр и др.) и фоллбэком на BeautifulSoup.
+   - `DeepSeekRewriter`, `OpenAIRewriter`, `CompositeRewriter`: адаптеры LLM с поддержкой кастомных шлюзов (`OPENAI_BASE_URL`), генерации 4 концептов обложек и автоматическим fallback.
+   - `DalleImageGenerator`: генерация реальных изображений через `gpt-image-2` / DALL-E, поддержка как прямых URL, так и декодирования `b64_json` с сохранением в `storage/images/`.
 3. `src/application/`:
-   - `PipelineOrchestrator`: координация шагов конвейера, автоматическое обогащение постоянными хэштегами канала (`channel_hashtags`), дедупликация и модерационные операции (approve, regenerate_image, rewrite_text, reject).
+   - `PipelineOrchestrator`: координация шагов конвейера, автоматическое обогащение постоянными хэштегами канала (`channel_hashtags`), сквозная передача `source_url`, дедупликация и модерационные операции (approve, regenerate_image, rewrite_text, reject).
 4. `src/presentation/`:
    - `keyboards.py`: инлайн-клавиатуры модерации и выбора тона.
-   - `publisher.py`: отправка постов (с фото или только текст) в Telegram-канал.
-   - `handlers.py`: хэндлеры команд `/start`, `/help`, `/tone`, приёма ссылок/текста и интерактивных callback'ов одобрения.
-   - `main.py`: точка входа, конфигурация dependency injection, запуск бота.
+   - `publisher.py`: отправка постов (с фото через `FSInputFile` или только текст) в Telegram-канал с автоматическим разделением сообщений при длине подписи >1024 символов.
+   - `handlers.py`: хэндлеры команд `/start`, `/help`, `/tone`, приёма ссылок, пересланных сообщений (`forward_origin`), скрытых ссылок из `message.entities` (`text_link`) и интерактивных callback'ов одобрения.
+   - `main.py`: точка входа, конфигурация dependency injection, запуск бота с автоматическим удалением старых webhook перед стартом polling.
 5. `tests/`:
-   - 25 тестов (Unit, Integration, E2E), 100% пройдены.
-6. Контейнеризация:
-   - `Dockerfile`, `docker-compose.yml`.
+   - 29 тестов (Unit, Integration, E2E), 100% пройдены.
+6. Контейнеризация и процесс-менеджер:
+   - `ecosystem.config.js` для PM2, `Dockerfile`, `docker-compose.yml`.
 
 ## 4. Current Status
-- Контекст актуален. Проект полностью инициализирован, спроектирован по SDD/DDD/ADR, протестирован и готов к запуску.
+- Развернут на VPS `UPO` (`147.45.124.192`) под управлением PM2 (`tg-ai-repost-bot`).
+- Подключен шлюз `https://cheapvibecode.ru/v1` с моделями `gpt-5.6-terra` и `gpt-image-2`.
+- Все архитектурные решения зафиксированы в `docs/SDD.md`, `docs/DDD.md` и `docs/adr/ADR-001` - `ADR-008`.

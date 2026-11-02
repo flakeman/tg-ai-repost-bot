@@ -54,15 +54,15 @@
 - `ContentHash`: SHA-256 хэш нормализованного URL или очищенного текста.
 - `Tone`: Enum (`FORMAL`, `CASUAL`, `DYNAMIC`, `HUMOROUS`, `ANALYTICAL`).
 - `JobStatus`: Enum состояний конвейера.
-- `PostContent`: Неизменяемый объект с полями `title: str`, `body: str`, `hashtags: list[str]`.
-- `ImageAsset`: Неизменяемый объект с полями `image_url: str | None`, `prompt_used: str | None`, `is_placeholder: bool`.
+- `PostContent`: Неизменяемый объект с полями `title: str`, `body: str`, `hashtags: list[str]`, `source_url: str | None` (ссылка на первоисточник), `image_prompts: list[str]` (варианты промптов/концептов).
+- `ImageAsset`: Неизменяемый объект с полями `image_url: str | None` (HTTP-ссылка или локальный путь к файлу), `prompt_used: str | None`, `is_placeholder: bool`.
 
 ### 3.2 Aggregate Root: `PublishingJob`
 - **ID:** `JobId`
 - **Fields:**
   - `user_id: int` (Telegram ID автора)
-  - `source_input: str` (исходный URL или текст)
-  - `is_url: bool`
+  - `source_input: str` (исходный URL или текст, очищенный от спецсимволов перевода строк)
+  - `is_url: bool` (детерминированная проверка отсутствия пробелов и переводов строк)
   - `content_hash: ContentHash`
   - `tone: Tone`
   - `extracted_title: str | None`
@@ -95,12 +95,16 @@
 ---
 
 ## 5. Domain Interfaces (Ports)
-- `IArticleExtractor`: `async def extract(url: str) -> tuple[str, str]` (title, body)
-- `ILLMRewriter`: `async def rewrite(raw_text: str, tone: Tone) -> PostContent`
-- `IImageGenerator`: `async def generate(prompt: str) -> ImageAsset`
+- `IArticleExtractor`:
+  - `async def extract(url: str) -> tuple[str, str]` (title, body)
+  - `async def extract_with_url(url: str) -> tuple[str, str, str]` (title, body, final_source_url) — поддерживает разворачивание `t.me/<channel>/<id>` и поиск ссылок на первоисточники (Хабр и др.)
+- `ILLMRewriter`:
+  - `async def rewrite(raw_text: str, tone: Tone) -> PostContent`
+  - `async def rewrite_with_prompt(raw_text: str, tone: Tone, title_hint: str | None) -> tuple[PostContent, str | None]`
+- `IImageGenerator`: `async def generate(prompt: str) -> ImageAsset` (поддерживает возвращение URL или сохранение base64 в `storage/images/*.png`)
 - `IJobRepository`:
   - `async def save(job: PublishingJob) -> None`
   - `async def get_by_id(job_id: str) -> PublishingJob | None`
   - `async def get_by_hash(content_hash: str) -> PublishingJob | None`
   - `async def get_pending_jobs() -> list[PublishingJob]`
-- `IPublisher`: `async def publish_to_channel(channel_id: str, draft: PostContent, image: ImageAsset | None) -> int`
+- `IPublisher`: `async def publish_to_channel(channel_id: str, draft: PostContent, image: ImageAsset | None) -> int` (поддерживает `FSInputFile` для локальных файлов и URL для удаленных)
