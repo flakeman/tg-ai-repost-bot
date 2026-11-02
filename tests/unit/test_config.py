@@ -35,7 +35,8 @@ def test_settings_admin_ids_parsing_from_csv():
 def test_settings_channel_hashtags_parsing():
     settings = Settings(
         bot_token="test_token",
-        channel_id="@channel",
+        channel_id="https://t.me/etoitnovosti",
         channel_hashtags="#новости, tech, #новости, ai-news",
     )
+    assert settings.channel_id == "@etoitnovosti"
     assert settings.channel_hashtags == ["#новости", "#tech", "#ai_news"]

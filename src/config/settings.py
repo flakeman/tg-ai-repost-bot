@@ -16,6 +16,16 @@ class Settings(BaseSettings):
     channel_id: str = Field(..., description="Telegram Channel ID or username (e.g. @mychannel or -100...)")
     admin_ids: Union[List[int], str] = Field(default_factory=list, description="List of authorized admin user IDs")
 
+    @field_validator("channel_id", mode="before")
+    @classmethod
+    def normalize_channel_id(cls, v: Any) -> str:
+        s = str(v).strip()
+        if "t.me/" in s:
+            s = s.split("t.me/")[-1].strip("/")
+        if not s.startswith("@") and not s.startswith("-"):
+            s = f"@{s}"
+        return s
+
     # Storage
     db_path: str = Field(default="storage/bot.db", description="Path to SQLite database file")
 
