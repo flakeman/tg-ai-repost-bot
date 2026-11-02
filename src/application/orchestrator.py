@@ -30,16 +30,21 @@ class PipelineOrchestrator:
         self.publisher = publisher
         self.channel_hashtags = channel_hashtags or []
 
-    def _enrich_hashtags(self, draft: PostContent) -> PostContent:
-        if not self.channel_hashtags:
-            return draft
+    def _enrich_hashtags(self, draft: PostContent, source_url: Optional[str] = None) -> PostContent:
         combined = list(draft.hashtags)
-        seen = {t.lower() for t in combined}
-        for tag in self.channel_hashtags:
-            if tag.lower() not in seen:
-                seen.add(tag.lower())
-                combined.append(tag)
-        return PostContent(title=draft.title, body=draft.body, hashtags=combined)
+        if self.channel_hashtags:
+            seen = {t.lower() for t in combined}
+            for tag in self.channel_hashtags:
+                if tag.lower() not in seen:
+                    seen.add(tag.lower())
+                    combined.append(tag)
+        return PostContent(
+            title=draft.title,
+            body=draft.body,
+            hashtags=combined,
+            source_url=source_url or draft.source_url,
+            image_prompts=draft.image_prompts,
+        )
 
     async def submit_content(
         self, user_id: int, source_input: str, tone: Tone = Tone.DYNAMIC
@@ -75,11 +80,30 @@ class PipelineOrchestrator:
             job.start_extracting()
             await self.repository.save(job)
 
+            resolved_url = None
             if job.is_url:
-                title, body = await self.extractor.extract(job.source_input)
+                try:
+                    title, body, resolved_url = await self.extractor.extract_with_url(job.source_input)
+                except (AttributeError, TypeError):
+                    title, body = await self.extractor.extract(job.source_input)
+                    resolved_url = job.source_input
             else:
-                title = "Пользовательский материал"
-                body = job.source_input
+                import re
+                found = re.search(r"https?://\S+", job.source_input)
+                if found:
+                    extracted_target = found.group(0).rstrip(".,;!?)")
+                    try:
+                        try:
+                            title, body, resolved_url = await self.extractor.extract_with_url(extracted_target)
+                        except (AttributeError, TypeError):
+                            title, body = await self.extractor.extract(extracted_target)
+                            resolved_url = extracted_target
+                    except Exception:
+                        title = "Пользовательский материал"
+                        body = job.source_input
+                else:
+                    title = "Пользовательский материал"
+                    body = job.source_input
 
             job.set_extracted_content(title=title, body=body)
             await self.repository.save(job)
@@ -96,7 +120,7 @@ class PipelineOrchestrator:
                 draft = await self.rewriter.rewrite(body, job.tone, title_hint=title)
                 img_prompt = None
 
-            draft = self._enrich_hashtags(draft)
+            draft = self._enrich_hashtags(draft, source_url=resolved_url)
             job.set_draft(draft)
             await self.repository.save(job)
 

@@ -81,6 +81,8 @@ class PostContent(BaseModel):
     title: str
     body: str
     hashtags: List[str] = Field(default_factory=list)
+    source_url: Optional[str] = None
+    image_prompts: List[str] = Field(default_factory=list)
 
     @field_validator("hashtags", mode="before")
     @classmethod
@@ -104,6 +106,8 @@ class PostContent(BaseModel):
         """
         tags_str = " ".join(self.hashtags) if self.hashtags else ""
         parts = [f"<b>{self.title.strip()}</b>", "", self.body.strip()]
+        if self.source_url:
+            parts.extend(["", f'<a href="{self.source_url}">🔗 Источник</a>'])
         if tags_str:
             parts.extend(["", tags_str])
         return "\n".join(parts)

@@ -32,6 +32,15 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
     prefix = "<b>📋 ПРЕДПРОСМОТР ПУБЛИКАЦИИ:</b>\n\n"
     full_text = prefix + text
 
+    if job.draft and job.draft.image_prompts:
+        prompts_formatted = []
+        for p in job.draft.image_prompts:
+            clean_p = p.strip()
+            if clean_p:
+                prompts_formatted.append(clean_p if clean_p.startswith(("🎨", "📊", "📸", "⚡", "•", "1", "2", "3", "4")) else f"• {clean_p}")
+        if prompts_formatted:
+            full_text += "\n\n<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
+
     if job.image and job.image.image_url and not job.image.is_placeholder:
         if len(full_text) <= 1024:
             await bot.send_photo(
@@ -54,10 +63,9 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
                 disable_web_page_preview=True,
             )
     else:
-        note = "\n\n<i>(Изображение отсутствует или используется плейсхолдер)</i>"
         await bot.send_message(
             chat_id=chat_id,
-            text=full_text + note,
+            text=full_text,
             parse_mode=ParseMode.HTML,
             reply_markup=kb,
             disable_web_page_preview=True,

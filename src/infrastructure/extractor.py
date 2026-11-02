@@ -25,12 +25,44 @@ class TrafilaturaExtractor(IArticleExtractor):
         }
 
     async def extract(self, url: str) -> Tuple[str, str]:
+        title, body, _ = await self.extract_with_url(url)
+        return title, body
+
+    async def extract_with_url(self, url: str) -> Tuple[str, str, str]:
+        # Handle Telegram post links: e.g. https://t.me/channel/123
+        tg_match = re.search(r"t\.me/([^/]+)/(\d+)", url)
+        if tg_match and tg_match.group(1).lower() not in ("joinchat", "addstickers", "c"):
+            channel, msg_id = tg_match.group(1), tg_match.group(2)
+            embed_url = f"https://t.me/{channel}/{msg_id}?embed=1"
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, headers=self.headers) as client:
+                    resp = await client.get(embed_url)
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        msg_node = soup.find(class_="tgme_widget_message_text")
+                        if msg_node:
+                            # Check for external source links inside the telegram message
+                            for a in msg_node.find_all("a", href=True):
+                                href = a["href"].strip()
+                                if href.startswith("http") and not any(d in href.lower() for d in ["t.me/", "telegram.org", "telegram.me"]):
+                                    # Follow and extract primary article source!
+                                    return await self.extract_with_url(href)
+
+                            # If no external link found, use the telegram post text directly
+                            post_text = msg_node.get_text("\n", strip=True)
+                            lines = [ln.strip() for ln in post_text.split("\n") if ln.strip()]
+                            title = lines[0][:80] if lines else "Новость из Telegram"
+                            return title, post_text, url
+            except Exception:
+                pass  # Fallback to normal URL fetching
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, headers=self.headers) as client:
                 response = await client.get(url)
                 if response.status_code >= 400:
                     raise ExtractionError(f"HTTP error {response.status_code} while fetching {url}")
                 html = response.text
+                final_url = str(response.url)
         except httpx.RequestError as exc:
             raise ExtractionError(f"Network error requesting {url}: {exc}") from exc
 
@@ -81,4 +113,4 @@ class TrafilaturaExtractor(IArticleExtractor):
         # Clean multiple empty lines
         body = re.sub(r"\n{3,}", "\n\n", body)
 
-        return title, body
+        return title, body, final_url

@@ -77,3 +77,44 @@ async def test_extract_http_error(monkeypatch):
 
     with pytest.raises(ExtractionError, match="HTTP error"):
         await extractor.extract("https://news.com/missing")
+
+
+@pytest.mark.asyncio
+async def test_extract_telegram_post_resolves_external_link(monkeypatch):
+    extractor = TrafilaturaExtractor()
+
+    tg_embed_html = """
+    <!DOCTYPE html>
+    <html><body>
+        <div class="tgme_widget_message_text">
+            Интересная новость из мира ИИ: подробнее читайте по ссылке
+            <a href="https://habr.com/ru/articles/123456/">https://habr.com/ru/articles/123456/</a>
+        </div>
+    </body></html>
+    """
+
+    habr_html = """
+    <!DOCTYPE html>
+    <html>
+    <head><title>Полная статья на Хабре</title></head>
+    <body>
+        <article>
+            <h1>Полная статья на Хабре о технологиях</h1>
+            <p>Это подробный текст статьи первоисточника, опубликованный на Хабре.</p>
+            <p>В тексте содержится детальное описание архитектуры и результатов тестирования.</p>
+        </article>
+    </body>
+    </html>
+    """
+
+    async def mock_get(self, url, *args, **kwargs):
+        url_str = str(url)
+        if "embed=1" in url_str:
+            return httpx.Response(200, text=tg_embed_html, request=httpx.Request("GET", url_str))
+        return httpx.Response(200, text=habr_html, request=httpx.Request("GET", url_str))
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+
+    title, body = await extractor.extract("https://t.me/mychannel/777")
+    assert "Хабре" in title
+    assert "первоисточника" in body
