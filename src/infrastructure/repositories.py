@@ -1,0 +1,141 @@
+import json
+from datetime import datetime, timezone
+from typing import List, Optional
+import aiosqlite
+from src.domain.interfaces import IJobRepository
+from src.domain.models import PublishingJob, JobStatus, Tone, PostContent, ImageAsset
+
+
+class SqliteJobRepository(IJobRepository):
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+
+    def _row_to_job(self, row: aiosqlite.Row) -> PublishingJob:
+        draft = None
+        if row["rewritten_title"] and row["rewritten_body"]:
+            hashtags = []
+            if row["hashtags_json"]:
+                try:
+                    hashtags = json.loads(row["hashtags_json"])
+                except Exception:
+                    hashtags = []
+            draft = PostContent(
+                title=row["rewritten_title"],
+                body=row["rewritten_body"],
+                hashtags=hashtags,
+            )
+
+        image = None
+        if row["image_url"] or row["image_prompt"] or row["is_image_placeholder"]:
+            image = ImageAsset(
+                image_url=row["image_url"],
+                prompt_used=row["image_prompt"],
+                is_placeholder=bool(row["is_image_placeholder"]),
+            )
+
+        created_at = datetime.fromisoformat(row["created_at"])
+        updated_at = datetime.fromisoformat(row["updated_at"])
+
+        return PublishingJob(
+            id=row["id"],
+            user_id=row["user_id"],
+            source_input=row["source_input"],
+            is_url=bool(row["is_url"]),
+            content_hash=row["content_hash"],
+            tone=Tone(row["tone"]),
+            extracted_title=row["extracted_title"],
+            extracted_body=row["extracted_body"],
+            draft=draft,
+            image=image,
+            status=JobStatus(row["status"]),
+            channel_message_id=row["channel_message_id"],
+            error_message=row["error_message"],
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+
+    async def save(self, job: PublishingJob) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            hashtags_json = json.dumps(job.draft.hashtags) if job.draft else None
+            rewritten_title = job.draft.title if job.draft else None
+            rewritten_body = job.draft.body if job.draft else None
+            image_url = job.image.image_url if job.image else None
+            image_prompt = job.image.prompt_used if job.image else None
+            is_image_placeholder = 1 if (job.image and job.image.is_placeholder) else 0
+
+            await db.execute(
+                """
+                INSERT INTO publishing_jobs (
+                    id, user_id, source_input, is_url, content_hash, tone,
+                    extracted_title, extracted_body, rewritten_title, rewritten_body,
+                    hashtags_json, image_url, image_prompt, is_image_placeholder,
+                    status, channel_message_id, error_message, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    source_input=excluded.source_input,
+                    is_url=excluded.is_url,
+                    content_hash=excluded.content_hash,
+                    tone=excluded.tone,
+                    extracted_title=excluded.extracted_title,
+                    extracted_body=excluded.extracted_body,
+                    rewritten_title=excluded.rewritten_title,
+                    rewritten_body=excluded.rewritten_body,
+                    hashtags_json=excluded.hashtags_json,
+                    image_url=excluded.image_url,
+                    image_prompt=excluded.image_prompt,
+                    is_image_placeholder=excluded.is_image_placeholder,
+                    status=excluded.status,
+                    channel_message_id=excluded.channel_message_id,
+                    error_message=excluded.error_message,
+                    updated_at=excluded.updated_at;
+                """,
+                (
+                    job.id,
+                    job.user_id,
+                    job.source_input,
+                    1 if job.is_url else 0,
+                    job.content_hash,
+                    job.tone.value,
+                    job.extracted_title,
+                    job.extracted_body,
+                    rewritten_title,
+                    rewritten_body,
+                    hashtags_json,
+                    image_url,
+                    image_prompt,
+                    is_image_placeholder,
+                    job.status.value,
+                    job.channel_message_id,
+                    job.error_message,
+                    job.created_at.isoformat(),
+                    job.updated_at.isoformat(),
+                ),
+            )
+            await db.commit()
+
+    async def get_by_id(self, job_id: str) -> Optional[PublishingJob]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM publishing_jobs WHERE id = ?", (job_id,)) as cursor:
+                row = await cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_job(row)
+
+    async def get_by_hash(self, content_hash: str) -> Optional[PublishingJob]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM publishing_jobs WHERE content_hash = ?", (content_hash,)) as cursor:
+                row = await cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_job(row)
+
+    async def get_by_status(self, status: JobStatus) -> List[PublishingJob]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM publishing_jobs WHERE status = ? ORDER BY created_at ASC", (status.value,)) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_job(row) for row in rows]
