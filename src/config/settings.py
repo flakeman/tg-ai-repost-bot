@@ -1,6 +1,7 @@
-from typing import List, Union
+from typing import Any, List, Union
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from src.domain.models import normalize_hashtag
 
 
 class Settings(BaseSettings):
@@ -34,6 +35,34 @@ class Settings(BaseSettings):
 
     # Tone Defaults
     default_tone: str = Field(default="dynamic", description="Default rewriting tone: casual, formal, dynamic")
+
+    # Channel Fixed Hashtags (appended to every post)
+    channel_hashtags: List[str] = Field(
+        default_factory=list,
+        description="List of fixed channel hashtags (e.g. #news, #tech)"
+    )
+
+    @field_validator("channel_hashtags", mode="before")
+    @classmethod
+    def parse_channel_hashtags(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            clean = v.strip("[]() ")
+            if not clean:
+                return []
+            items = [item.strip() for item in clean.split(",") if item.strip()]
+        elif isinstance(v, (list, tuple)):
+            items = list(v)
+        else:
+            return []
+
+        normalized = []
+        seen = set()
+        for item in items:
+            norm = normalize_hashtag(str(item))
+            if norm and norm.lower() not in seen:
+                seen.add(norm.lower())
+                normalized.append(norm)
+        return normalized
 
     @field_validator("admin_ids", mode="before")
     @classmethod

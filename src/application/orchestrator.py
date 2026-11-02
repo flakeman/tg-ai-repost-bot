@@ -20,12 +20,25 @@ class PipelineOrchestrator:
         rewriter: ILLMRewriter,
         image_generator: IImageGenerator,
         publisher: IPublisher,
+        channel_hashtags: Optional[List[str]] = None,
     ):
         self.repository = repository
         self.extractor = extractor
         self.rewriter = rewriter
         self.image_generator = image_generator
         self.publisher = publisher
+        self.channel_hashtags = channel_hashtags or []
+
+    def _enrich_hashtags(self, draft: PostContent) -> PostContent:
+        if not self.channel_hashtags:
+            return draft
+        combined = list(draft.hashtags)
+        seen = {t.lower() for t in combined}
+        for tag in self.channel_hashtags:
+            if tag.lower() not in seen:
+                seen.add(tag.lower())
+                combined.append(tag)
+        return PostContent(title=draft.title, body=draft.body, hashtags=combined)
 
     async def submit_content(
         self, user_id: int, source_input: str, tone: Tone = Tone.DYNAMIC
@@ -82,6 +95,7 @@ class PipelineOrchestrator:
                 draft = await self.rewriter.rewrite(body, job.tone, title_hint=title)
                 img_prompt = None
 
+            draft = self._enrich_hashtags(draft)
             job.set_draft(draft)
             await self.repository.save(job)
 
@@ -167,6 +181,7 @@ class PipelineOrchestrator:
         else:
             draft = await self.rewriter.rewrite(body, job.tone, title_hint=title_hint)
 
+        draft = self._enrich_hashtags(draft)
         job.set_draft(draft)
         job.status = JobStatus.AWAITING_APPROVAL
         await self.repository.save(job)

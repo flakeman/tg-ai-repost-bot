@@ -6,7 +6,28 @@ from src.domain.models import (
     ImageAsset,
     PublishingJob,
     compute_content_hash,
+    normalize_hashtag,
 )
+
+
+def test_normalize_hashtag():
+    assert normalize_hashtag("ai-tech") == "#ai_tech"
+    assert normalize_hashtag("#CryptoNews") == "#CryptoNews"
+    assert normalize_hashtag("  blockchain  ") == "#blockchain"
+    assert normalize_hashtag("invalid !@#$ symbols") == "#invalid_symbols"
+    assert normalize_hashtag("") == ""
+
+
+def test_post_content_hashtags_normalization():
+    draft = PostContent(
+        title="Тест",
+        body="Тело поста",
+        hashtags=["ai-news", "#AI_News", "Tech", "#Tech", "crypto"],
+    )
+    # Checks deduplication case-insensitively and proper leading #
+    assert draft.hashtags == ["#ai_news", "#Tech", "#crypto"]
+    rendered = draft.render_post()
+    assert "#ai_news #Tech #crypto" in rendered
 
 
 def test_compute_content_hash_deterministic():

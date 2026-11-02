@@ -4,9 +4,9 @@ import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 from urllib.parse import urlparse, urlunparse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class JobStatus(str, Enum):
@@ -27,6 +27,21 @@ class Tone(str, Enum):
     DYNAMIC = "dynamic"
     HUMOROUS = "humorous"
     ANALYTICAL = "analytical"
+
+
+def normalize_hashtag(tag: str) -> str:
+    """
+    Normalizes a hashtag:
+    - strips spaces and leading '#'
+    - replaces hyphens and whitespace with underscores
+    - removes non-alphanumeric characters (keeping underscore)
+    - returns with leading '#'
+    """
+    cleaned = tag.strip().lstrip("#").replace("-", "_")
+    cleaned = re.sub(r"\s+", "_", cleaned)
+    cleaned = re.sub(r"[^\w]", "", cleaned)
+    cleaned = re.sub(r"_{2,}", "_", cleaned).strip("_")
+    return f"#{cleaned}" if cleaned else ""
 
 
 def compute_content_hash(content: str) -> str:
@@ -66,6 +81,22 @@ class PostContent(BaseModel):
     title: str
     body: str
     hashtags: List[str] = Field(default_factory=list)
+
+    @field_validator("hashtags", mode="before")
+    @classmethod
+    def clean_and_normalize_hashtags(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            v = [t.strip() for t in v.replace(",", " ").split() if t.strip()]
+        if not isinstance(v, (list, tuple)):
+            return []
+        result = []
+        seen = set()
+        for item in v:
+            norm = normalize_hashtag(str(item))
+            if norm and norm.lower() not in seen:
+                seen.add(norm.lower())
+                result.append(norm)
+        return result
 
     def render_post(self) -> str:
         """

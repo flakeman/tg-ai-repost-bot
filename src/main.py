@@ -81,6 +81,7 @@ def build_orchestrator(settings: Settings, bot: Bot) -> PipelineOrchestrator:
         rewriter=composite_rewriter,
         image_generator=image_gen,
         publisher=publisher,
+        channel_hashtags=settings.channel_hashtags,
     )
 
 

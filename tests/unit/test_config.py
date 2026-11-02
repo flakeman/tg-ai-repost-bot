@@ -30,3 +30,12 @@ def test_settings_admin_ids_parsing_from_csv():
         admin_ids="100,200,300",
     )
     assert settings.admin_ids == [100, 200, 300]
+
+
+def test_settings_channel_hashtags_parsing():
+    settings = Settings(
+        bot_token="test_token",
+        channel_id="@channel",
+        channel_hashtags="#новости, tech, #новости, ai-news",
+    )
+    assert settings.channel_hashtags == ["#новости", "#tech", "#ai_news"]
