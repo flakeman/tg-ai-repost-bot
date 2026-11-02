@@ -131,7 +131,7 @@ async def handle_tone_callback(callback: CallbackQuery):
         await callback.answer("Ошибка выбора тона", show_alert=True)
 
 
-@router.message(F.text)
+@router.message(F.text | F.caption)
 async def handle_incoming_content(
     message: Message, orchestrator: PipelineOrchestrator, settings: Settings, bot: Bot
 ):
@@ -140,7 +140,7 @@ async def handle_incoming_content(
         await message.answer("⛔ Доступ ограничен.")
         return
 
-    content = message.text.strip()
+    content = (message.text or message.caption or "").strip()
     active_tone = _user_tones.get(user_id, Tone(settings.default_tone))
 
     # Ingestion & Dedup check
