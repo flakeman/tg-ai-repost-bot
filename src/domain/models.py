@@ -1,0 +1,162 @@
+from __future__ import annotations
+import hashlib
+import re
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import List, Optional
+from urllib.parse import urlparse, urlunparse
+from pydantic import BaseModel, Field
+
+
+class JobStatus(str, Enum):
+    PENDING = "PENDING"
+    EXTRACTING = "EXTRACTING"
+    REWRITING = "REWRITING"
+    GENERATING_IMAGE = "GENERATING_IMAGE"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    PUBLISHING = "PUBLISHING"
+    PUBLISHED = "PUBLISHED"
+    REJECTED = "REJECTED"
+    FAILED = "FAILED"
+
+
+class Tone(str, Enum):
+    CASUAL = "casual"
+    FORMAL = "formal"
+    DYNAMIC = "dynamic"
+    HUMOROUS = "humorous"
+    ANALYTICAL = "analytical"
+
+
+def compute_content_hash(content: str) -> str:
+    """
+    Computes a deterministic SHA-256 hash.
+    If the content is a URL, normalizes it by removing UTM parameters, fragments,
+    and trailing slashes. If raw text, normalizes whitespace.
+    """
+    stripped = content.strip()
+    if stripped.startswith("http://") or stripped.startswith("https://"):
+        parsed = urlparse(stripped)
+        # Drop UTM queries
+        query_parts = []
+        if parsed.query:
+            for pair in parsed.query.split("&"):
+                if not pair.lower().startswith("utm_") and not pair.lower().startswith("fbclid"):
+                    query_parts.append(pair)
+        normalized_query = "&".join(sorted(query_parts))
+        normalized_path = parsed.path.rstrip("/")
+        normalized_url = urlunparse((
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            normalized_path,
+            "",
+            normalized_query,
+            "",
+        ))
+        raw = normalized_url
+    else:
+        # Normalize whitespace in raw text
+        raw = re.sub(r"\s+", " ", stripped).lower()
+
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class PostContent(BaseModel):
+    title: str
+    body: str
+    hashtags: List[str] = Field(default_factory=list)
+
+    def render_post(self) -> str:
+        """
+        Renders ready-to-publish Telegram HTML format.
+        """
+        tags_str = " ".join(self.hashtags) if self.hashtags else ""
+        parts = [f"<b>{self.title.strip()}</b>", "", self.body.strip()]
+        if tags_str:
+            parts.extend(["", tags_str])
+        return "\n".join(parts)
+
+
+class ImageAsset(BaseModel):
+    image_url: Optional[str] = None
+    prompt_used: Optional[str] = None
+    is_placeholder: bool = False
+
+
+class PublishingJob(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: int
+    source_input: str
+    is_url: bool
+    content_hash: str
+    tone: Tone = Tone.DYNAMIC
+    extracted_title: Optional[str] = None
+    extracted_body: Optional[str] = None
+    draft: Optional[PostContent] = None
+    image: Optional[ImageAsset] = None
+    status: JobStatus = JobStatus.PENDING
+    channel_message_id: Optional[int] = None
+    error_message: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @classmethod
+    def create(cls, user_id: int, source_input: str, tone: Tone = Tone.DYNAMIC) -> PublishingJob:
+        stripped = source_input.strip()
+        is_url = stripped.startswith("http://") or stripped.startswith("https://")
+        c_hash = compute_content_hash(stripped)
+        return cls(
+            user_id=user_id,
+            source_input=stripped,
+            is_url=is_url,
+            content_hash=c_hash,
+            tone=tone,
+            status=JobStatus.PENDING,
+        )
+
+    def _touch(self) -> None:
+        self.updated_at = datetime.now(timezone.utc)
+
+    def start_extracting(self) -> None:
+        self.status = JobStatus.EXTRACTING
+        self._touch()
+
+    def set_extracted_content(self, title: str, body: str) -> None:
+        self.extracted_title = title.strip()
+        self.extracted_body = body.strip()
+        self._touch()
+
+    def set_draft(self, draft: PostContent) -> None:
+        self.draft = draft
+        self._touch()
+
+    def set_image(self, image: ImageAsset) -> None:
+        self.image = image
+        self._touch()
+
+    def mark_awaiting_approval(self) -> None:
+        if not self.draft:
+            raise ValueError("Draft is required before requesting approval")
+        self.status = JobStatus.AWAITING_APPROVAL
+        self._touch()
+
+    def approve(self) -> None:
+        if not self.draft:
+            raise ValueError("Cannot approve job without draft")
+        self.status = JobStatus.PUBLISHING
+        self._touch()
+
+    def mark_published(self, channel_message_id: int) -> None:
+        self.channel_message_id = channel_message_id
+        self.status = JobStatus.PUBLISHED
+        self._touch()
+
+    def reject(self) -> None:
+        self.status = JobStatus.REJECTED
+        self._touch()
+
+    def fail(self, reason: str) -> None:
+        self.error_message = reason
+        self.status = JobStatus.FAILED
+        self._touch()
