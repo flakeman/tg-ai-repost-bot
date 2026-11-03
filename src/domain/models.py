@@ -105,17 +105,21 @@ class PostContent(BaseModel):
         Renders ready-to-publish Telegram HTML format.
         If max_length is specified (e.g. 1024 for photo caption),
         safely constrains the total length within the limit.
+        Automatically converts markdown code formatting (`code`, ```blocks```) to Telegram HTML.
         """
-        tags_str = " ".join(self.hashtags) if self.hashtags else ""
-        header = f"<b>{self.title.strip()}</b>"
+        from src.presentation.text_utils import convert_markdown_to_telegram_html
+
+        clean_title = self.title.strip().replace("**", "").replace("<b>", "").replace("</b>", "")
+        header = f"<b>{clean_title}</b>"
         source_part = f'<a href="{self.source_url}">🔗 Источник</a>' if self.source_url else ""
-        body_text = self.body.strip()
+        raw_body = convert_markdown_to_telegram_html(self.body.strip())
+        body_text = raw_body
 
         if max_length:
             footer_parts = []
             if source_part:
                 footer_parts.extend(["", source_part])
-            if tags_str:
+            if tags_str := " ".join(self.hashtags) if self.hashtags else "":
                 footer_parts.extend(["", tags_str])
             footer_text = "\n".join(footer_parts)
 
@@ -139,6 +143,8 @@ class PostContent(BaseModel):
                             body_text = truncated[:last_space] + "..."
                         else:
                             body_text = truncated + "..."
+        else:
+            tags_str = " ".join(self.hashtags) if self.hashtags else ""
 
         parts = [header, "", body_text]
         if source_part:

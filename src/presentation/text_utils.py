@@ -1,4 +1,41 @@
+import re
 from typing import List
+
+
+def convert_markdown_to_telegram_html(text: str) -> str:
+    """
+    Converts markdown backticks and bold tags to Telegram-compliant HTML tags:
+    - ```lang\ncode\n``` -> <pre><code class="language-lang">code</code></pre>
+    - `code` -> <code>code</code>
+    - **bold** -> <b>bold</b>
+    """
+    if not text:
+        return ""
+
+    # 1. Multi-line code blocks: ```[lang]\n...\n```
+    def replace_code_block(match: re.Match) -> str:
+        lang = (match.group(1) or "").strip()
+        code = match.group(2).strip("\r\n")
+        # Escape HTML entities inside code block
+        code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if lang:
+            return f'<pre><code class="language-{lang}">{code}</code></pre>'
+        return f"<pre><code>{code}</code></pre>"
+
+    text = re.sub(r"```([a-zA-Z0-9_-]*)\r?\n?(.*?)```", replace_code_block, text, flags=re.DOTALL)
+
+    # 2. Inline code: `code`
+    def replace_inline_code(match: re.Match) -> str:
+        code = match.group(1)
+        code = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return f"<code>{code}</code>"
+
+    text = re.sub(r"`([^`\r\n]+)`", replace_inline_code, text)
+
+    # 3. Bold: **text**
+    text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
+
+    return text
 
 
 def split_telegram_message(text: str, max_length: int = 4000) -> List[str]:
