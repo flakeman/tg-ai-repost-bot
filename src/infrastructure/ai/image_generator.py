@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 import os
@@ -25,38 +26,64 @@ class DalleImageGenerator(IImageGenerator):
         self.images_dir = images_dir
         os.makedirs(self.images_dir, exist_ok=True)
 
-    async def generate(self, prompt: str) -> ImageAsset:
-        full_prompt = f"{prompt.strip()}. Style: {self.style_modifier}"
-        try:
-            kwargs = {
-                "model": self.model,
-                "prompt": full_prompt[:950],
-                "n": 1,
-            }
-            if "dall-e" in self.model:
-                kwargs["size"] = "1024x1024"
-                kwargs["quality"] = "standard"
+    async def generate(self, prompt: str, max_retries: int = 3) -> ImageAsset:
+        clean_prompt = prompt.strip()
+        if "Style:" not in clean_prompt and self.style_modifier:
+            full_prompt = f"{clean_prompt}. Style: {self.style_modifier}"
+        else:
+            full_prompt = clean_prompt
 
-            response = await self.client.images.generate(**kwargs)
-            item = response.data[0]
+        prompts_to_try = [
+            full_prompt[:950],
+            # Fallback 1: shorter core summary
+            clean_prompt.split(".")[0][:400] + (f". Style: {self.style_modifier}" if self.style_modifier else ""),
+            # Fallback 2: minimal concise prompt
+            clean_prompt[:250]
+        ]
 
-            image_url = getattr(item, "url", None)
-            b64_json = getattr(item, "b64_json", None)
+        last_error = None
+        for attempt, current_prompt in enumerate(prompts_to_try[:max_retries]):
+            try:
+                kwargs = {
+                    "model": self.model,
+                    "prompt": current_prompt,
+                    "n": 1,
+                }
+                if "dall-e" in self.model:
+                    kwargs["size"] = "1024x1024"
+                    kwargs["quality"] = "standard"
 
-            if b64_json:
-                img_bytes = base64.b64decode(b64_json)
-                filename = f"gen_{uuid.uuid4().hex[:12]}.png"
-                filepath = os.path.join(self.images_dir, filename)
-                with open(filepath, "wb") as f:
-                    f.write(img_bytes)
-                image_url = filepath
+                logger.info("Generating image (attempt %d/%d) with model %s...", attempt + 1, max_retries, self.model)
+                response = await self.client.images.generate(**kwargs)
 
-            if image_url:
-                return ImageAsset(image_url=image_url, prompt_used=full_prompt, is_placeholder=False)
-            return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
-        except Exception as exc:
-            logger.error("Image generation failed: %s", exc)
-            return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
+                if not response or not getattr(response, "data", None) or len(response.data) == 0:
+                    err_msg = getattr(response, "error", None) or "Empty response data"
+                    raise RuntimeError(f"Image API returned no data: {err_msg}")
+
+                item = response.data[0]
+                image_url = getattr(item, "url", None)
+                b64_json = getattr(item, "b64_json", None)
+
+                if b64_json:
+                    img_bytes = base64.b64decode(b64_json)
+                    filename = f"gen_{uuid.uuid4().hex[:12]}.png"
+                    filepath = os.path.join(self.images_dir, filename)
+                    with open(filepath, "wb") as f:
+                        f.write(img_bytes)
+                    image_url = filepath
+
+                if image_url:
+                    logger.info("Image generated successfully on attempt %d: %s", attempt + 1, image_url)
+                    return ImageAsset(image_url=image_url, prompt_used=current_prompt, is_placeholder=False)
+
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Image generation attempt %d failed: %s. Retrying...", attempt + 1, exc)
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+
+        logger.error("All image generation attempts failed. Last error: %s", last_error)
+        return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
 
 
 class MockImageGenerator(IImageGenerator):

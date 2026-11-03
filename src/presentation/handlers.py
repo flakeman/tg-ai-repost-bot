@@ -158,7 +158,7 @@ async def handle_tone_callback(callback: CallbackQuery):
         await callback.answer("Ошибка выбора тона", show_alert=True)
 
 
-@router.message(F.text | F.caption)
+@router.message(F.text | F.caption | F.video | F.photo | F.animation | F.document | F.forward_origin | F.forward_from_chat)
 async def handle_incoming_content(
     message: Message, orchestrator: PipelineOrchestrator, settings: Settings, bot: Bot
 ):
@@ -195,6 +195,14 @@ async def handle_incoming_content(
             msg_id = getattr(message, "forward_from_message_id", None)
             if getattr(chat, "username", None) and msg_id:
                 target_url = f"https://t.me/{chat.username}/{msg_id}"
+
+    if not raw_content and not target_url:
+        await message.reply(
+            "⚠️ <b>Не удалось определить текст или ссылку на материал.</b>\n"
+            "Пожалуйста, отправьте ссылку на публикацию или перешлите пост из канала.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
 
     # If URL is the sole content or user forwarded a short post with a URL
     if target_url and (raw_content == target_url or not raw_content or len(raw_content) < 150):
@@ -237,7 +245,10 @@ async def handle_incoming_content(
         )
         return
 
-    await status_msg.delete()
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
     await send_draft_preview(bot, message.chat.id, processed_job)
 
 
@@ -268,7 +279,10 @@ async def handle_regen_image_callback(
     status_msg = await callback.message.answer("🎨 Генерирую новое изображение...")
     try:
         updated_job = await orchestrator.regenerate_image(job_id)
-        await status_msg.delete()
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
         await send_draft_preview(bot, callback.message.chat.id, updated_job)
     except Exception as exc:
         await status_msg.edit_text(f"❌ Ошибка генерации обложки: {exc}")
@@ -283,7 +297,10 @@ async def handle_regen_text_callback(
     status_msg = await callback.message.answer("✍️ Нейросеть готовит новый вариант текста...")
     try:
         updated_job = await orchestrator.rewrite_text(job_id)
-        await status_msg.delete()
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
         await send_draft_preview(bot, callback.message.chat.id, updated_job)
     except Exception as exc:
         await status_msg.edit_text(f"❌ Ошибка рерайта: {exc}")

@@ -42,6 +42,7 @@ class TrafilaturaExtractor(IArticleExtractor):
         if tg_match and tg_match.group(1).lower() not in ("joinchat", "addstickers", "c"):
             channel, msg_id = tg_match.group(1), tg_match.group(2)
             embed_url = f"https://t.me/{channel}/{msg_id}?embed=1"
+            direct_url = f"https://t.me/{channel}/{msg_id}"
             try:
                 async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, headers=self.headers) as client:
                     resp = await client.get(embed_url)
@@ -61,6 +62,28 @@ class TrafilaturaExtractor(IArticleExtractor):
                             lines = [ln.strip() for ln in post_text.split("\n") if ln.strip()]
                             title = lines[0][:80] if lines else "Новость из Telegram"
                             return title, post_text, url
+
+                    # Fallback for video/media/unsupported posts where embed=1 does not show tgme_widget_message_text
+                    resp_direct = await client.get(direct_url)
+                    if resp_direct.status_code == 200:
+                        soup_direct = BeautifulSoup(resp_direct.text, "html.parser")
+                        og_desc = soup_direct.find("meta", property="og:description") or soup_direct.find("meta", attrs={"name": "twitter:description"})
+                        if og_desc and og_desc.get("content"):
+                            post_text = og_desc["content"].strip()
+                            if len(post_text) > 10:
+                                # Check if post_text contains an external link to extract
+                                link_match = re.search(r"https?://[^\s]+", post_text)
+                                if link_match:
+                                    ext_link = link_match.group(0).rstrip(".,;!?)")
+                                    if not any(d in ext_link.lower() for d in ["t.me/", "telegram.org", "telegram.me"]):
+                                        try:
+                                            return await self.extract_with_url(ext_link)
+                                        except Exception:
+                                            pass
+                                lines = [ln.strip() for ln in post_text.split("\n") if ln.strip()]
+                                og_title = soup_direct.find("meta", property="og:title")
+                                title = lines[0][:80] if lines else (og_title["content"] if og_title else "Новость из Telegram")
+                                return title, post_text, url
             except Exception:
                 pass  # Fallback to normal URL fetching
 
