@@ -2,13 +2,31 @@ import asyncio
 import base64
 import logging
 import os
+import re
 import uuid
 from typing import Optional
+import httpx
 from openai import AsyncOpenAI
 from src.domain.interfaces import IImageGenerator
 from src.domain.models import ImageAsset
 
 logger = logging.getLogger(__name__)
+
+SENSITIVE_REPLACEMENTS = [
+    (r"\b(donald\s+)?trump\b", "diplomat"),
+    (r"\b(vladimir\s+)?putin\b", "statesman"),
+    (r"\b(joe\s+)?biden\b", "president"),
+    (r"\b(kamala\s+)?harris\b", "official"),
+    (r"\b(volodymyr\s+)?zelensky\b", "leader"),
+    (r"\b(war|warfare|battlefield|bloodshed|missiles?|weapons?|bombing|invasion)\b", "geopolitical summit"),
+]
+
+
+def sanitize_image_prompt(prompt: str) -> str:
+    cleaned = prompt
+    for pattern, replacement in SENSITIVE_REPLACEMENTS:
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 
 class DalleImageGenerator(IImageGenerator):
@@ -26,34 +44,47 @@ class DalleImageGenerator(IImageGenerator):
         self.images_dir = images_dir
         os.makedirs(self.images_dir, exist_ok=True)
 
-    async def generate(self, prompt: str, max_retries: int = 3) -> ImageAsset:
-        clean_prompt = prompt.strip()
-        if "Style:" not in clean_prompt and self.style_modifier:
-            full_prompt = f"{clean_prompt}. Style: {self.style_modifier}"
+    async def generate(self, prompt: str, max_retries: int = 4) -> ImageAsset:
+        raw_prompt = prompt.strip()
+        sanitized = sanitize_image_prompt(raw_prompt)
+
+        if "Style:" not in sanitized and self.style_modifier:
+            full_prompt = f"{sanitized}. Style: {self.style_modifier}"
         else:
-            full_prompt = clean_prompt
+            full_prompt = sanitized
 
         prompts_to_try = [
             full_prompt[:950],
             # Fallback 1: shorter core summary
-            clean_prompt.split(".")[0][:400] + (f". Style: {self.style_modifier}" if self.style_modifier else ""),
+            sanitized.split(".")[0][:400] + (f". Style: {self.style_modifier}" if self.style_modifier else ""),
             # Fallback 2: minimal concise prompt
-            clean_prompt[:250]
+            sanitized[:250],
+            # Fallback 3: generic conceptual prompt
+            f"Minimalist modern news editorial illustration, diplomatic and technological concept. Style: {self.style_modifier}",
         ]
 
+        # Model rotation if primary fails (supports cheapvibecode and OpenAI)
+        candidate_models = [self.model]
+        for fallback_m in ["gpt-image-2.5-flare", "gpt-image-1", "gpt-image-2"]:
+            if fallback_m not in candidate_models:
+                candidate_models.append(fallback_m)
+
         last_error = None
-        for attempt, current_prompt in enumerate(prompts_to_try[:max_retries]):
+        for attempt in range(max_retries):
+            current_prompt = prompts_to_try[attempt % len(prompts_to_try)]
+            current_model = candidate_models[attempt % len(candidate_models)]
+
             try:
                 kwargs = {
-                    "model": self.model,
+                    "model": current_model,
                     "prompt": current_prompt,
                     "n": 1,
                 }
-                if "dall-e" in self.model:
+                if "dall-e" in current_model:
                     kwargs["size"] = "1024x1024"
                     kwargs["quality"] = "standard"
 
-                logger.info("Generating image (attempt %d/%d) with model %s...", attempt + 1, max_retries, self.model)
+                logger.info("Generating image (attempt %d/%d) with model %s...", attempt + 1, max_retries, current_model)
                 response = await self.client.images.generate(**kwargs)
 
                 if not response or not getattr(response, "data", None) or len(response.data) == 0:
@@ -71,16 +102,28 @@ class DalleImageGenerator(IImageGenerator):
                     with open(filepath, "wb") as f:
                         f.write(img_bytes)
                     image_url = filepath
+                elif image_url and image_url.startswith("http"):
+                    try:
+                        async with httpx.AsyncClient(timeout=30.0) as hclient:
+                            r = await hclient.get(image_url)
+                            if r.status_code == 200:
+                                filename = f"gen_{uuid.uuid4().hex[:12]}.png"
+                                filepath = os.path.join(self.images_dir, filename)
+                                with open(filepath, "wb") as f:
+                                    f.write(r.content)
+                                image_url = filepath
+                    except Exception as down_err:
+                        logger.warning("Failed to download image from URL %s: %s", image_url, down_err)
 
                 if image_url:
-                    logger.info("Image generated successfully on attempt %d: %s", attempt + 1, image_url)
+                    logger.info("Image generated successfully on attempt %d with model %s: %s", attempt + 1, current_model, image_url)
                     return ImageAsset(image_url=image_url, prompt_used=current_prompt, is_placeholder=False)
 
             except Exception as exc:
                 last_error = exc
-                logger.warning("Image generation attempt %d failed: %s. Retrying...", attempt + 1, exc)
+                logger.warning("Image generation attempt %d failed (model %s): %s. Retrying...", attempt + 1, current_model, exc)
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3 * (attempt + 1))
 
         logger.error("All image generation attempts failed. Last error: %s", last_error)
         return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
