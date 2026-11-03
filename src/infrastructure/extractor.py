@@ -97,9 +97,13 @@ class TrafilaturaExtractor(IArticleExtractor):
         except httpx.RequestError as exc:
             raise ExtractionError(f"Network error requesting {url}: {exc}") from exc
 
+        # Guard against massive HTML payloads (SPAs, binary dumps, huge datasets)
+        # Cap HTML input to 1.5MB to avoid memory exhaustion and lxml stalls
+        html_to_parse = html[:1_500_000] if len(html) > 1_500_000 else html
+
         # 1. Primary extraction via trafilatura
         body = trafilatura.extract(
-            html,
+            html_to_parse,
             include_links=False,
             include_images=False,
             include_comments=False,
@@ -107,12 +111,12 @@ class TrafilaturaExtractor(IArticleExtractor):
             output_format="txt",
         )
         
-        metadata = trafilatura.extract_metadata(html)
+        metadata = trafilatura.extract_metadata(html_to_parse)
         title = metadata.title if metadata and metadata.title else ""
 
         # 2. Fallback to BeautifulSoup if body or title missing
         if not body or len(body.strip()) < 50 or not title:
-            soup = BeautifulSoup(html, "html.parser")
+            soup = BeautifulSoup(html_to_parse, "html.parser")
 
             if not title:
                 # Try OpenGraph, H1, or <title>
@@ -143,5 +147,9 @@ class TrafilaturaExtractor(IArticleExtractor):
 
         # Clean multiple empty lines
         body = re.sub(r"\n{3,}", "\n\n", body)
+
+        # Cap body length so that massive pages do not overwhelm LLM context limits
+        if len(body) > 25_000:
+            body = body[:25_000]
 
         return title, body, final_url

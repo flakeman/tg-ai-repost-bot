@@ -56,6 +56,14 @@ class PipelineOrchestrator:
         c_hash = compute_content_hash(source_input)
         existing = await self.repository.get_by_hash(c_hash)
         if existing:
+            # If previous job failed or got interrupted/crashed (e.g. still in EXTRACTING or FAILED), allow retrying it
+            if existing.status in (JobStatus.EXTRACTING, JobStatus.REWRITING, JobStatus.GENERATING_IMAGE, JobStatus.FAILED):
+                logger.info(
+                    "Found existing incomplete job %s (status: %s). Allowing retry.",
+                    existing.id,
+                    existing.status.value,
+                )
+                return existing, False
             logger.info("Found existing job %s for content hash %s", existing.id, c_hash)
             return existing, True
 
