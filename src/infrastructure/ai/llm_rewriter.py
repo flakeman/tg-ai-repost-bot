@@ -5,6 +5,7 @@ from openai import AsyncOpenAI
 from src.domain.interfaces import ILLMRewriter
 from src.domain.models import Tone, PostContent
 from src.infrastructure.ai.prompts import build_system_prompt, build_user_prompt
+from src.infrastructure.ai.json_parser import RobustJsonParser
 
 
 class RewriterError(Exception):
@@ -71,14 +72,9 @@ class OpenAIRewriter(ILLMRewriter):
 
     @staticmethod
     def _parse_json_payload(raw_content: str) -> dict:
-        text = raw_content.strip()
-        # Remove markdown fenced blocks if present
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
-            text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
         try:
-            return json.loads(text)
-        except json.JSONDecodeError as err:
+            return RobustJsonParser.parse(raw_content)
+        except Exception as err:
             raise RewriterError(f"Failed to parse LLM JSON response: {err}\nContent was: {raw_content[:200]}")
 
 

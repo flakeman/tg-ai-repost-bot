@@ -96,3 +96,31 @@ async def test_source_url_persistence(temp_repo):
     assert loaded is not None
     assert loaded.draft is not None
     assert loaded.draft.source_url == "https://habr.com/ru/articles/1102922/"
+
+
+@pytest.mark.asyncio
+async def test_user_settings_persistence(tmp_path):
+    from src.domain.models import UserSettings
+    from src.infrastructure.repositories import SqliteSettingsRepository
+
+    db_file = str(tmp_path / "test_settings.db")
+    await init_db(db_file)
+    settings_repo = SqliteSettingsRepository(db_file)
+
+    # Initial default retrieval
+    settings = await settings_repo.get_user_settings(999, default_tone=Tone.ANALYTICAL)
+    assert settings.user_id == 999
+    assert settings.preferred_tone == Tone.ANALYTICAL
+    assert settings.preferred_image_model is None
+
+    # Update and save
+    settings.update_tone(Tone.HUMOROUS)
+    settings.update_image_model("gpt-image-2.5-flare")
+    await settings_repo.save_user_settings(settings)
+
+    # Re-read
+    loaded = await settings_repo.get_user_settings(999)
+    assert loaded.user_id == 999
+    assert loaded.preferred_tone == Tone.HUMOROUS
+    assert loaded.preferred_image_model == "gpt-image-2.5-flare"
+

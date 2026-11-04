@@ -236,3 +236,19 @@ class PublishingJob(BaseModel):
         self.error_message = reason
         self.status = JobStatus.FAILED
         self._touch()
+
+
+class UserSettings(BaseModel):
+    user_id: int
+    preferred_tone: Tone = Tone.DYNAMIC
+    preferred_image_model: Optional[str] = None
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def update_tone(self, tone: Tone) -> None:
+        self.preferred_tone = tone
+        self.updated_at = datetime.now(timezone.utc)
+
+    def update_image_model(self, model_name: Optional[str]) -> None:
+        self.preferred_image_model = model_name
+        self.updated_at = datetime.now(timezone.utc)
+

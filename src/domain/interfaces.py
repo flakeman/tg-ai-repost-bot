@@ -1,6 +1,18 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
-from src.domain.models import PublishingJob, Tone, PostContent, ImageAsset, JobStatus
+from src.domain.models import PublishingJob, Tone, PostContent, ImageAsset, JobStatus, UserSettings
+
+
+class ISettingsRepository(ABC):
+    @abstractmethod
+    async def get_user_settings(self, user_id: int, default_tone: Tone = Tone.DYNAMIC) -> UserSettings:
+        """Retrieve settings for a user, or return defaults."""
+        pass
+
+    @abstractmethod
+    async def save_user_settings(self, settings: UserSettings) -> None:
+        """Persist user settings."""
+        pass
 
 
 class IJobRepository(ABC):

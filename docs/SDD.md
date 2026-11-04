@@ -2,21 +2,25 @@
 ## Telegram AI Repost & Publishing Pipeline Bot
 
 - **Project Name:** Telegram AI Repost & Publishing Pipeline Bot
-- **Version:** 1.0.0
+- **Version:** 1.1.0
 - **Author:** Pair Programming (User & Antigravity)
-- **Date:** 2026-11-02
-- **Status:** Approved
+- **Date:** 2026-11-04
+- **Status:** Approved (Hardened & Settings Extension)
 
 ---
 
 ## 1. Purpose & Goals
-- **Business Goal:** Предоставить владельцу Telegram-канала автономного, но контролируемого ассистента для публикации новостей и статей. Конвейер принимает ссылку или сырой текст, защищает от дубликатов, извлекает чистый текст, переписывает его в динамичном живом стиле через LLM с сохранением всех фактов и цифр, генерирует релевантную обложкую и отправляет интерактивный черновик на утверждение автору в Telegram ЛС. Только после нажатия кнопки «Опубликовать» пост размещается в канале.
+- **Business Goal:** Предоставить владельцу Telegram-канала автономного, но контролируемого ассистента для публикации новостей и статей. Конвейер принимает ссылку или сырой текст, защищает от дубликатов, извлекает чистый текст, переписывает его в динамичном живом стиле через LLM с сохранением всех фактов и цифр, генерирует релевантную обложку и отправляет интерактивный черновик на утверждение автору в Telegram ЛС. Только после нажатия кнопки «Опубликовать» пост размещается в канале.
+- **Интерактивное управление настройками:** Встроенное меню `/settings` в Telegram для оперативного переключения тональности, модели генерации картинок, просмотра привязанного канала и управления хэштегами без правки серверных файлов.
 - **Success Criteria:**
-  - Дедупликация 100% повторно отправленных ссылок/текстов.
-  - Устойчивость к падению внешних AI API: автоматический fallback на резервную модель, публикация без картинки в случае отказа генератора изображений.
+  - Дедупликация 100% повторно отправленных ссылок/текстов с возможностью перезапуска незавершённых задач.
+  - Асинхронная неблокирующая очередь обработки (In-Memory Worker Queue): мгновенный ответ бота пользователю (< 200 мс).
+  - Устойчивость к падению внешних AI API: автоматический fallback на резервную модель, ротация моделей генерации картинок (`gpt-image-2.5-flare`, `gpt-image-1`, `gpt-image-2`) и санитизация чувствительных триггеров.
+  - Устойчивый парсинг веб-страниц: защитный лимит на размер HTML (1.5 МБ), обход защиты от ботов через резервный прокси Jina Reader.
+  - Защита хранилища: автоматическая ротация локальных изображений с TTL 14 дней.
   - Zero hallucination leak: ни один пост не публикуется в канал без ручного одобрения владельца (human-in-the-loop).
   - 100% покрытие ключевых сценариев unit-, integration- и e2e-тестами.
-- **Out of Scope (v1):** Мультиканальная маршрутизация по категориям (запланировано в будущем), платная подписка.
+- **Out of Scope (v1.1):** Мультиканальная маршрутизация по категориям (запланировано в будущем), платная подписка.
 
 ---
 
@@ -26,6 +30,11 @@
 - **Aggregate Root:** `PublishingJob`
   - ID: `UUID`
   - Invariants: `AWAITING_APPROVAL` требует наличия `PostContent`; `PUBLISHED` требует флага `is_approved=True`.
+- **Entity:** `UserSettings`
+  - `user_id`: ID пользователя Telegram.
+  - `preferred_tone`: Тон рерайта (по умолчанию `dynamic`).
+  - `preferred_image_model`: Модель генератора картинок.
+  - `updated_at`: Временная метка изменения.
 - **Value Objects:** `ContentHash`, `Tone`, `JobStatus`, `PostContent`, `ImageAsset`.
 
 ---
@@ -35,16 +44,16 @@
 ```
 +-------------------------------------------------------------------------------+
 |                       Presentation Layer (aiogram 3)                          |
-|  - Message Handlers (Raw text, URL commands /rewrite)                         |
-|  - Callback Handlers (Inline buttons: [Опубликовать], [Переделать], etc.)     |
+|  - Message Handlers (Raw text, URL commands /rewrite, /settings)              |
+|  - Callback Handlers (Moderation buttons, Settings inline menus)              |
 +-------------------------------------------------------------------------------+
                                       │  (DTOs / Commands)
                                       ▼
 +-------------------------------------------------------------------------------+
 |                       Application Layer (Use Cases & Pipeline)                |
+|  - PipelineQueueWorker (In-Memory Worker Queue: asyncio.Queue)                |
 |  - PipelineOrchestrator (State machine transitions)                           |
-|  - IngestContentUseCase, ExtractUseCase, RewriteUseCase, ImageGenUseCase      |
-|  - ApproveAndPublishUseCase, RegenerateUseCase                                |
+|  - SettingsService / StorageManager (TTL Cleanup & Orphan Recovery)           |
 +-------------------------------------------------------------------------------+
                                       │  (Ports / Interfaces)
          ┌────────────────────────────┼────────────────────────────┐
@@ -52,19 +61,20 @@
 +--------------------+      +--------------------+      +--------------------+
 | Extractor Adapter  |      |   AI Provider      |      | Persistence        |
 | - Trafilatura      |      |   Adapters         |      | - SQLite (WAL)     |
-| - BeautifulSoup    |      | - OpenAI/DeepSeek  |      | - aiosqlite        |
-| - HTTPX Client     |      | - DALL-E / Flux    |      |                    |
+| - BeautifulSoup    |      | - OpenAI/DeepSeek  |      | - aiosqlite +      |
+| - Jina Reader Fall |      | - DALL-E / Flare / |      |   busy_timeout     |
+| - HTTPX Client     |      |   Sunburst Rotator |      |                    |
 +--------------------+      +--------------------+      +--------------------+
 ```
 
 ### 3.2 Technology Stack
 - **Language:** Python 3.12+ / 3.14+
 - **Bot Framework:** aiogram 3.17+
-- **Database:** SQLite 3 with WAL mode via `aiosqlite`
+- **Database:** SQLite 3 with WAL mode via `aiosqlite` with strict connection pooling & `busy_timeout = 5000`
 - **AI Clients:** OpenAI SDK (OpenAI API, DeepSeek API, and OpenAI-compatible gateways like `cheapvibecode.ru`)
-- **Scraper:** `trafilatura` + `httpx` + `beautifulsoup4` (с поддержкой встраиваемых Telegram-виджетов `?embed=1` и резолва внешних первоисточников)
-- **Image Generation & Storage:** `gpt-image-2` / DALL-E 3 с поддержкой декодирования `b64_json` и локальным файловым хранилищем `storage/images/`
-- **Testing:** `pytest`, `pytest-asyncio`, `pytest-mock` (29 тестов: unit, integration, e2e)
+- **Scraper:** `trafilatura` + `httpx` + `beautifulsoup4` + `Jina Reader API fallback`
+- **Image Generation & Storage:** Multi-model fallback rotator (`gpt-image-2.5-flare`, `gpt-image-1`, `gpt-image-2`), `storage/images/` с TTL-очисткой
+- **Testing:** `pytest`, `pytest-asyncio`, `pytest-mock`
 
 ---
 

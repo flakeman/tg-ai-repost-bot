@@ -1,112 +1,52 @@
 import logging
+from typing import Optional
 from aiogram import Router, F, Bot
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from src.application.orchestrator import PipelineOrchestrator
+from src.application.queue import PipelineQueueWorker
 from src.config.settings import Settings
+from src.domain.interfaces import ISettingsRepository
 from src.domain.models import Tone, PublishingJob
-from src.presentation.keyboards import build_approval_keyboard, build_tone_keyboard
+from src.infrastructure.storage_manager import StorageManager
+from src.presentation.preview import get_photo_target, send_draft_preview
+from src.presentation.keyboards import (
+    build_approval_keyboard,
+    build_tone_keyboard,
+    build_settings_main_keyboard,
+    build_settings_tone_keyboard,
+    build_settings_model_keyboard,
+)
 from src.presentation.text_utils import split_telegram_message
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="main_router")
 
-# Global session tone memory for the user (in-memory default)
-_user_tones: dict[int, Tone] = {}
-
-
-def get_photo_target(image_path_or_url: str):
-    if image_path_or_url.startswith("http://") or image_path_or_url.startswith("https://"):
-        return image_path_or_url
-    return FSInputFile(image_path_or_url)
-
 
 def is_authorized(user_id: int, settings: Settings) -> bool:
     if not settings.admin_ids:
-        return True
+        logger.warning("ADMIN_IDS is not configured! Denying access to user %s", user_id)
+        return False
     return user_id in settings.admin_ids
-
-
-async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None:
-    """
-    Sends interactive preview of the post to the author's direct messages.
-    If image exists, sends photo with caption and keyboard in ONE single message.
-    """
-    kb = build_approval_keyboard(job.id)
-
-    if job.image and job.image.image_url and not job.image.is_placeholder:
-        photo_target = get_photo_target(job.image.image_url)
-        post_caption = job.draft.render_post(max_length=1024) if job.draft else "Черновик не сформирован"
-
-        # Send photo and post text together in ONE message
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo_target,
-            caption=post_caption,
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb,
-        )
-
-        # Send concept suggestions as a supplementary info message
-        if job.draft and job.draft.image_prompts:
-            prompts_formatted = []
-            for p in job.draft.image_prompts:
-                clean_p = p.strip()
-                if clean_p:
-                    prompts_formatted.append(clean_p if clean_p.startswith(("🎨", "📊", "📸", "⚡", "•", "1", "2", "3", "4")) else f"• {clean_p}")
-            if prompts_formatted:
-                prompts_text = "<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=prompts_text,
-                    parse_mode=ParseMode.HTML,
-                    disable_web_page_preview=True,
-                )
-        return
-
-    # Text-only preview (no image)
-    text = job.draft.render_post() if job.draft else "Черновик не сформирован"
-    full_text = text
-
-    if job.draft and job.draft.image_prompts:
-        prompts_formatted = []
-        for p in job.draft.image_prompts:
-            clean_p = p.strip()
-            if clean_p:
-                prompts_formatted.append(clean_p if clean_p.startswith(("🎨", "📊", "📸", "⚡", "•", "1", "2", "3", "4")) else f"• {clean_p}")
-        if prompts_formatted:
-            full_text += "\n\n<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
-
-    chunks = split_telegram_message(full_text, max_length=4000)
-    for i, chunk in enumerate(chunks):
-        is_last = (i == len(chunks) - 1)
-        await bot.send_message(
-            chat_id=chat_id,
-            text=chunk,
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb if is_last else None,
-            disable_web_page_preview=True,
-        )
 
 
 @router.message(CommandStart())
 async def handle_start(message: Message, settings: Settings):
     if not is_authorized(message.from_user.id, settings):
-        await message.answer("⛔ Доступ ограничен. Вы не авторизованы для использования этого бота.")
+        await message.answer("⛔ Извините, у вас нет доступа к этому боту.")
         return
 
     welcome_text = (
-        "👋 <b>Добро пожаловать в AI News Publisher Bot!</b>\n\n"
-        "Этот бот автоматизирует конвейер создания публикаций для вашего канала:\n"
-        "1. 📥 Отправьте мне <b>ссылку на статью</b> или <b>скопированный текст</b>.\n"
-        "2. 🧠 Нейросеть выделит главное, перепишет текст в динамичном стиле и подберет хэштеги.\n"
-        "3. 🎨 Сгенерирует обложку для поста.\n"
-        "4. 🔍 Пришлет вам черновик на утверждение перед отправкой в канал.\n\n"
-        "Команды:\n"
-        "/tone — выбрать стиль изложения\n"
-        "/help — подробная справка"
+        "👋 <b>Добро пожаловать в Telegram AI Repost Bot!</b>\n\n"
+        "Я помогу автоматически извлекать статьи и новости по ссылке или тексту, "
+        "адаптировать их для Telegram-канала, генерировать обложки и публиковать контент.\n\n"
+        "<b>Команды:</b>\n"
+        "• /settings — панель настроек (стиль, модель картинок, канал, кэш)\n"
+        "• /tone — быстрый выбор тона рерайта\n"
+        "• /help — подробная инструкция\n\n"
+        "<i>Отправьте мне ссылку на статью или перешлите пост из канала, чтобы начать!</i>"
     )
     await message.answer(welcome_text, parse_mode=ParseMode.HTML)
 
@@ -125,17 +65,187 @@ async def handle_help(message: Message, settings: Settings):
         "  - <b>Опубликовать:</b> отправить в целевой канал.\n"
         "  - <b>Перегенерировать фото:</b> создать новый визуал.\n"
         "  - <b>Переписать текст:</b> запросить другой вариант рерайта.\n"
-        "  - <b>Отклонить:</b> отменить пост."
+        "  - <b>Отклонить:</b> отменить пост.\n\n"
+        "⚙️ Управление параметрами: команда <b>/settings</b>"
     )
     await message.answer(help_text, parse_mode=ParseMode.HTML)
 
 
+@router.message(Command("settings"))
+async def handle_settings_command(
+    message: Message, settings: Settings, settings_repo: Optional[ISettingsRepository] = None
+):
+    if not is_authorized(message.from_user.id, settings):
+        await message.answer("⛔ Доступ ограничен.")
+        return
+
+    user_id = message.from_user.id
+    current_tone = Tone(settings.default_tone)
+    active_model = settings.dalle_model
+
+    if settings_repo:
+        user_settings = await settings_repo.get_user_settings(user_id, default_tone=current_tone)
+        current_tone = user_settings.preferred_tone
+        active_model = user_settings.preferred_image_model or settings.dalle_model
+
+    hashtags_str = ", ".join(settings.channel_hashtags) if settings.channel_hashtags else "нет"
+    text = (
+        "⚙️ <b>Панель управления настройками бота</b>\n\n"
+        f"• 🎭 <b>Стиль рерайта:</b> <code>{current_tone.value}</code>\n"
+        f"• 🎨 <b>Модель генератора обложек:</b> <code>{active_model}</code>\n"
+        f"• 📢 <b>Целевой канал:</b> <code>{settings.channel_id}</code>\n"
+        f"• 🏷️ <b>Хэштеги канала:</b> <code>{hashtags_str}</code>\n\n"
+        "<i>Нажмите на нужный пункт меню для изменения параметров:</i>"
+    )
+    kb = build_settings_main_keyboard(current_tone, active_model, settings.channel_id)
+    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+@router.callback_query(F.data == "cb:set:main")
+async def handle_settings_main_callback(
+    callback: CallbackQuery, settings: Settings, settings_repo: Optional[ISettingsRepository] = None
+):
+    user_id = callback.from_user.id
+    current_tone = Tone(settings.default_tone)
+    active_model = settings.dalle_model
+
+    if settings_repo:
+        user_settings = await settings_repo.get_user_settings(user_id, default_tone=current_tone)
+        current_tone = user_settings.preferred_tone
+        active_model = user_settings.preferred_image_model or settings.dalle_model
+
+    hashtags_str = ", ".join(settings.channel_hashtags) if settings.channel_hashtags else "нет"
+    text = (
+        "⚙️ <b>Панель управления настройками бота</b>\n\n"
+        f"• 🎭 <b>Стиль рерайта:</b> <code>{current_tone.value}</code>\n"
+        f"• 🎨 <b>Модель генератора обложек:</b> <code>{active_model}</code>\n"
+        f"• 📢 <b>Целевой канал:</b> <code>{settings.channel_id}</code>\n"
+        f"• 🏷️ <b>Хэштеги канала:</b> <code>{hashtags_str}</code>\n\n"
+        "<i>Нажмите на нужный пункт меню для изменения параметров:</i>"
+    )
+    kb = build_settings_main_keyboard(current_tone, active_model, settings.channel_id)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cb:set:tone_menu")
+async def handle_settings_tone_menu(
+    callback: CallbackQuery, settings: Settings, settings_repo: Optional[ISettingsRepository] = None
+):
+    user_id = callback.from_user.id
+    current_tone = Tone(settings.default_tone)
+    if settings_repo:
+        user_settings = await settings_repo.get_user_settings(user_id, default_tone=current_tone)
+        current_tone = user_settings.preferred_tone
+
+    text = "🎭 <b>Выберите предпочитаемый стиль (тон) рерайта:</b>"
+    kb = build_settings_tone_keyboard(current_tone)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cb:set:tone:"))
+async def handle_settings_tone_select(
+    callback: CallbackQuery, settings: Settings, settings_repo: Optional[ISettingsRepository] = None
+):
+    tone_str = callback.data.split(":")[3]
+    try:
+        new_tone = Tone(tone_str)
+        if settings_repo:
+            user_settings = await settings_repo.get_user_settings(callback.from_user.id, default_tone=new_tone)
+            user_settings.update_tone(new_tone)
+            await settings_repo.save_user_settings(user_settings)
+        await callback.answer(f"Стиль обновлен: {new_tone.value}")
+    except Exception as exc:
+        await callback.answer(f"Ошибка выбора стиля: {exc}", show_alert=True)
+
+    # Return to main settings
+    await handle_settings_main_callback(callback, settings, settings_repo)
+
+
+@router.callback_query(F.data == "cb:set:model_menu")
+async def handle_settings_model_menu(
+    callback: CallbackQuery, settings: Settings, settings_repo: Optional[ISettingsRepository] = None
+):
+    user_id = callback.from_user.id
+    current_model = settings.dalle_model
+    if settings_repo:
+        user_settings = await settings_repo.get_user_settings(user_id)
+        current_model = user_settings.preferred_image_model or settings.dalle_model
+
+    text = "🎨 <b>Выберите модель для генерации обложек:</b>"
+    kb = build_settings_model_keyboard(current_model)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cb:set:model:"))
+async def handle_settings_model_select(
+    callback: CallbackQuery, settings: Settings, settings_repo: Optional[ISettingsRepository] = None
+):
+    model_str = callback.data.split(":")[3]
+    try:
+        if settings_repo:
+            user_settings = await settings_repo.get_user_settings(callback.from_user.id)
+            user_settings.update_image_model(model_str)
+            await settings_repo.save_user_settings(user_settings)
+        await callback.answer(f"Модель сохранена: {model_str}")
+    except Exception as exc:
+        await callback.answer(f"Ошибка выбора модели: {exc}", show_alert=True)
+
+    # Return to main settings
+    await handle_settings_main_callback(callback, settings, settings_repo)
+
+
+@router.callback_query(F.data == "cb:set:channel_info")
+async def handle_settings_channel_info(callback: CallbackQuery, settings: Settings):
+    info_text = (
+        f"📢 <b>Информация о канале</b>\n\n"
+        f"• Текущий канал: <code>{settings.channel_id}</code>\n"
+        f"• Посты публикуются строго от имени этого канала.\n\n"
+        f"<i>Для смены канала укажите CHANNEL_ID в конфигурации бота.</i>"
+    )
+    await callback.answer("Канал: " + settings.channel_id, show_alert=True)
+
+
+@router.callback_query(F.data == "cb:set:hashtags_info")
+async def handle_settings_hashtags_info(callback: CallbackQuery, settings: Settings):
+    tags = ", ".join(settings.channel_hashtags) if settings.channel_hashtags else "хэштеги не настроены"
+    await callback.answer(f"Постоянные хэштеги:\n{tags}", show_alert=True)
+
+
+@router.callback_query(F.data == "cb:set:cleanup_cache")
+async def handle_settings_cleanup_cache(callback: CallbackQuery):
+    deleted = StorageManager.cleanup_expired_images("storage/images", max_age_days=0)
+    stats = StorageManager.get_storage_stats("storage/images")
+    await callback.answer(
+        f"🧹 Очистка завершена!\nУдалено файлов: {deleted}\nОсталось файлов: {stats['file_count']} ({stats['total_size_mb']} МБ)",
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data == "cb:set:close")
+async def handle_settings_close(callback: CallbackQuery):
+    await callback.answer("Настройки закрыты")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+
 @router.message(Command("tone"))
-async def handle_tone(message: Message, settings: Settings):
+async def handle_tone(message: Message, settings: Settings, settings_repo: Optional[ISettingsRepository] = None):
     if not is_authorized(message.from_user.id, settings):
         return
 
-    current = _user_tones.get(message.from_user.id, Tone(settings.default_tone))
+    current = Tone(settings.default_tone)
+    if settings_repo:
+        user_settings = await settings_repo.get_user_settings(message.from_user.id, default_tone=current)
+        current = user_settings.preferred_tone
+
     await message.answer(
         f"Текущий стиль изложения: <b>{current.value}</b>\nВыберите желаемый тон:",
         reply_markup=build_tone_keyboard(),
@@ -144,11 +254,17 @@ async def handle_tone(message: Message, settings: Settings):
 
 
 @router.callback_query(F.data.startswith("cb:tone:"))
-async def handle_tone_callback(callback: CallbackQuery):
+async def handle_tone_callback(
+    callback: CallbackQuery, settings: Settings, settings_repo: Optional[ISettingsRepository] = None
+):
     tone_str = callback.data.split(":")[2]
     try:
         new_tone = Tone(tone_str)
-        _user_tones[callback.from_user.id] = new_tone
+        if settings_repo:
+            user_settings = await settings_repo.get_user_settings(callback.from_user.id, default_tone=new_tone)
+            user_settings.update_tone(new_tone)
+            await settings_repo.save_user_settings(user_settings)
+
         await callback.answer(f"Стиль изменен на: {new_tone.value}")
         await callback.message.edit_text(
             f"✅ Стиль рерайта успешно обновлен на: <b>{new_tone.value}</b>",
@@ -160,7 +276,12 @@ async def handle_tone_callback(callback: CallbackQuery):
 
 @router.message(F.text | F.caption | F.video | F.photo | F.animation | F.document | F.forward_origin | F.forward_from_chat)
 async def handle_incoming_content(
-    message: Message, orchestrator: PipelineOrchestrator, settings: Settings, bot: Bot
+    message: Message,
+    orchestrator: PipelineOrchestrator,
+    settings: Settings,
+    bot: Bot,
+    settings_repo: Optional[ISettingsRepository] = None,
+    queue_worker: Optional[PipelineQueueWorker] = None,
 ):
     user_id = message.from_user.id
     if not is_authorized(user_id, settings):
@@ -212,7 +333,10 @@ async def handle_incoming_content(
     else:
         content = raw_content
 
-    active_tone = _user_tones.get(user_id, Tone(settings.default_tone))
+    active_tone = Tone(settings.default_tone)
+    if settings_repo:
+        user_settings = await settings_repo.get_user_settings(user_id, default_tone=active_tone)
+        active_tone = user_settings.preferred_tone
 
     # Ingestion & Dedup check
     job, is_duplicate = await orchestrator.submit_content(user_id, content, active_tone)
@@ -228,28 +352,26 @@ async def handle_incoming_content(
         return
 
     status_msg = await message.reply(
-        "⏳ <b>Принял в работу!</b>\nИзвлекаю контент и запускаю генерацию поста...",
+        "⏳ <b>Принял в работу!</b>\nЗадача добавлена в очередь генерации поста...",
         parse_mode=ParseMode.HTML,
     )
 
-    # Execute pipeline
-    processed_job = await orchestrator.process_pipeline(job.id)
-
-    if processed_job.status == PublishingJob.model_fields["status"].default:  # fallback check
-        pass
-
-    if processed_job.error_message:
-        await status_msg.edit_text(
-            f"❌ <b>Произошла ошибка при обработке:</b>\n<code>{processed_job.error_message}</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
-    await send_draft_preview(bot, message.chat.id, processed_job)
+    if queue_worker:
+        await queue_worker.enqueue(job.id, message.chat.id, status_msg.message_id)
+    else:
+        # Direct execution fallback (e.g. in test environments without queue worker)
+        processed_job = await orchestrator.process_pipeline(job.id)
+        if processed_job.error_message:
+            await status_msg.edit_text(
+                f"❌ <b>Произошла ошибка при обработке:</b>\n<code>{processed_job.error_message}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await send_draft_preview(bot, message.chat.id, processed_job)
 
 
 @router.callback_query(F.data.startswith("cb:pub:"))

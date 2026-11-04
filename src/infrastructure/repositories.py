@@ -2,8 +2,9 @@ import json
 from datetime import datetime, timezone
 from typing import List, Optional
 import aiosqlite
-from src.domain.interfaces import IJobRepository
-from src.domain.models import PublishingJob, JobStatus, Tone, PostContent, ImageAsset
+from src.domain.interfaces import IJobRepository, ISettingsRepository
+from src.domain.models import PublishingJob, JobStatus, Tone, PostContent, ImageAsset, UserSettings
+from src.infrastructure.database import get_db_connection
 
 
 class SqliteJobRepository(IJobRepository):
@@ -64,8 +65,7 @@ class SqliteJobRepository(IJobRepository):
         )
 
     async def save(self, job: PublishingJob) -> None:
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
+        async with get_db_connection(self.db_path) as db:
             hashtags_json = json.dumps(job.draft.hashtags) if job.draft else None
             rewritten_title = job.draft.title if job.draft else None
             rewritten_body = job.draft.body if job.draft else None
@@ -129,8 +129,7 @@ class SqliteJobRepository(IJobRepository):
             await db.commit()
 
     async def get_by_id(self, job_id: str) -> Optional[PublishingJob]:
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
+        async with get_db_connection(self.db_path) as db:
             async with db.execute("SELECT * FROM publishing_jobs WHERE id = ?", (job_id,)) as cursor:
                 row = await cursor.fetchone()
                 if not row:
@@ -138,8 +137,7 @@ class SqliteJobRepository(IJobRepository):
                 return self._row_to_job(row)
 
     async def get_by_hash(self, content_hash: str) -> Optional[PublishingJob]:
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
+        async with get_db_connection(self.db_path) as db:
             async with db.execute("SELECT * FROM publishing_jobs WHERE content_hash = ?", (content_hash,)) as cursor:
                 row = await cursor.fetchone()
                 if not row:
@@ -147,8 +145,49 @@ class SqliteJobRepository(IJobRepository):
                 return self._row_to_job(row)
 
     async def get_by_status(self, status: JobStatus) -> List[PublishingJob]:
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
+        async with get_db_connection(self.db_path) as db:
             async with db.execute("SELECT * FROM publishing_jobs WHERE status = ? ORDER BY created_at ASC", (status.value,)) as cursor:
                 rows = await cursor.fetchall()
                 return [self._row_to_job(row) for row in rows]
+
+
+class SqliteSettingsRepository(ISettingsRepository):
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+
+    async def get_user_settings(self, user_id: int, default_tone: Tone = Tone.DYNAMIC) -> UserSettings:
+        async with get_db_connection(self.db_path) as db:
+            async with db.execute(
+                "SELECT user_id, tone, image_model, updated_at FROM user_settings WHERE user_id = ?",
+                (user_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return UserSettings(
+                        user_id=row["user_id"],
+                        preferred_tone=Tone(row["tone"]),
+                        preferred_image_model=row["image_model"],
+                        updated_at=datetime.fromisoformat(row["updated_at"]),
+                    )
+                return UserSettings(user_id=user_id, preferred_tone=default_tone)
+
+    async def save_user_settings(self, settings: UserSettings) -> None:
+        async with get_db_connection(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO user_settings (user_id, tone, image_model, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    tone=excluded.tone,
+                    image_model=excluded.image_model,
+                    updated_at=excluded.updated_at;
+                """,
+                (
+                    settings.user_id,
+                    settings.preferred_tone.value,
+                    settings.preferred_image_model,
+                    settings.updated_at.isoformat(),
+                ),
+            )
+            await db.commit()
+

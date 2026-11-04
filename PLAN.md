@@ -67,3 +67,61 @@
 - **Files:** `Dockerfile`, `docker-compose.yml`, `README.md`, `CONTEXT.md` (финальное обновление).
 - **Logic:** Легковесный запуск в Docker на любом VPS.
 - **Tests:** Полный прогон `pytest` (100% passed).
+
+---
+
+## 2. Phase 2: Systematic Technical Debt Elimination & In-Bot Settings
+
+### Point 9: Архитектурная спецификация (ADR-011 .. ADR-016, SDD, DDD) [DONE]
+- **Files:** `docs/adr/ADR-011` .. `ADR-016`, `docs/SDD.md`, `docs/DDD.md`
+- **Logic:** Спецификация решений по каждому долгу и интерактивному меню настроек.
+- **Tests:** Валидация проектной документации.
+
+### Point 10: Персистентность настроек и интерактивная команда `/settings` (ADR-011) [DONE]
+- **Files:** `src/domain/models.py`, `src/infrastructure/database.py`, `src/infrastructure/repositories.py`, `src/presentation/keyboards.py`, `src/presentation/handlers.py`
+- **Logic:**
+  - Таблица `user_settings` в SQLite (`user_id`, `tone`, `image_model`, `updated_at`).
+  - Методы `get_user_settings` и `save_user_settings`.
+  - Устранение in-memory `_user_tones` словаря.
+  - Команда `/settings` и callback-навигация: переключение тона (`Tone`), выбор модели картинок, инфо о канале и хэштегах.
+- **Tests:** Тестирование `user_settings` в unit-тестах репозитория и e2e хэндлеров `/settings`.
+
+### Point 11: Укрепление работы с БД SQLite и фабрика соединений (ADR-012) [DONE]
+- **Files:** `src/infrastructure/database.py`, `src/infrastructure/repositories.py`
+- **Logic:**
+  - Асинхронный контекстный менеджер `get_db_connection(db_path)` с установкой `PRAGMA busy_timeout = 5000` и `PRAGMA journal_mode = WAL` на каждое открываемое соединение.
+  - Рефакторинг репозитория на использование фабрики соединений.
+- **Tests:** Проверка concurrent read/write тестами в `test_sqlite_repository.py`.
+
+### Point 12: Асинхронная очередь воркера обработки задач (ADR-013) [DONE]
+- **Files:** `src/application/queue.py`, `src/presentation/handlers.py`, `src/main.py`
+- **Logic:**
+  - Реализация `PipelineQueueWorker` на базе `asyncio.Queue`.
+  - Хэндлер немедленно отвечает пользователю и кладёт `job_id` в очередь.
+  - Воркер выполняет конвейер с контролируемой конкурентностью, обновляет статусное сообщение и присылает превью.
+- **Tests:** Тестирование постановки в очередь и обработки через моковый воркер.
+
+### Point 13: Восстановление зависших задач при старте и безопасная авторизация (ADR-014) [DONE]
+- **Files:** `src/application/recovery.py`, `src/presentation/handlers.py`, `src/main.py`
+- **Logic:**
+  - Метод `recover_orphaned_jobs()` при старте приложения: обнаружение задач со статусами `EXTRACTING`, `REWRITING`, `GENERATING_IMAGE`, перевод в `FAILED` с оповещением автора.
+  - `is_authorized`: fail-secure режим (если `admin_ids` пуст — доступ запрещен).
+- **Tests:** Тестирование логики восстановления задач и авторизации.
+
+### Point 14: Автоматическая очистка и ротация кэша картинок (ADR-015) [DONE]
+- **Files:** `src/infrastructure/storage_manager.py`, `src/main.py`
+- **Logic:**
+  - Модуль `StorageManager.cleanup_expired_images(images_dir, max_age_days=14)`.
+  - Периодический фоновый запуск раз в сутки и вызов при старте бота.
+- **Tests:** Unit-тест удаления устаревших файлов и сохранения свежих.
+
+### Point 15: Устойчивый парсер JSON и фоллбэк экстрактора Jina Reader (ADR-016) [DONE]
+- **Files:** `src/infrastructure/ai/json_parser.py`, `src/infrastructure/ai/llm_rewriter.py`, `src/infrastructure/extractor.py`
+- **Logic:**
+  - `RobustJsonParser`: безопасный парсинг JSON с очисткой trailing commas и regex-экстракцией полей.
+  - `TrafilaturaExtractor`: каскадный фоллбэк на `https://r.jina.ai/<url>` при 403 или блокировках ботов.
+- **Tests:** Тесты парсинга невалидного/грязного JSON и извлечения контента.
+
+### Point 16: Полная верификация, деплой на сервер и приёмочное тестирование [DONE]
+- **Files:** `tests/*`, развертывание на сервере через PM2.
+- **Logic:** Прогон всех тестов (48/48 passed), деплой на `UPO` (`147.45.124.192`), проверка работы `/settings`, recovery и конвейера.

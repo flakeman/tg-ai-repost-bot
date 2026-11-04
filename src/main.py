@@ -7,13 +7,16 @@ from aiogram.enums import ParseMode
 
 from src.config.settings import Settings
 from src.infrastructure.database import init_db
-from src.infrastructure.repositories import SqliteJobRepository
+from src.infrastructure.repositories import SqliteJobRepository, SqliteSettingsRepository
 from src.infrastructure.extractor import TrafilaturaExtractor
 from src.infrastructure.ai.llm_rewriter import OpenAIRewriter, DeepSeekRewriter
 from src.infrastructure.ai.composite import CompositeRewriter
 from src.infrastructure.ai.image_generator import DalleImageGenerator, MockImageGenerator
+from src.infrastructure.storage_manager import StorageManager
 from src.presentation.publisher import TelegramPublisher
 from src.application.orchestrator import PipelineOrchestrator
+from src.application.queue import PipelineQueueWorker
+from src.application.recovery import recover_orphaned_jobs
 from src.presentation.handlers import router
 
 logging.basicConfig(
@@ -89,21 +92,36 @@ def build_orchestrator(settings: Settings, bot: Bot) -> PipelineOrchestrator:
 
 async def main():
     settings = Settings()
+    if not settings.admin_ids:
+        logger.critical("SECURITY WARNING: ADMIN_IDS is empty! Nobody will have access to the bot.")
+
     logger.info("Initializing database at: %s", settings.db_path)
     await init_db(settings.db_path)
 
     bot, dp = create_bot_app(settings)
     orchestrator = build_orchestrator(settings, bot)
+    settings_repo = SqliteSettingsRepository(db_path=settings.db_path)
+
+    # Startup Maintenance: Recover orphaned jobs & cleanup expired cache
+    await recover_orphaned_jobs(repository=orchestrator.repository, bot=bot)
+    StorageManager.cleanup_expired_images(images_dir="storage/images", max_age_days=14)
+
+    # Start background queue worker (concurrency = 1)
+    queue_worker = PipelineQueueWorker(orchestrator=orchestrator, bot=bot, max_concurrent=1)
+    await queue_worker.start()
 
     # Inject dependencies into aiogram handlers
     dp["settings"] = settings
     dp["orchestrator"] = orchestrator
+    dp["settings_repo"] = settings_repo
+    dp["queue_worker"] = queue_worker
 
     logger.info("Starting Telegram Bot long-polling for channel: %s", settings.channel_id)
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
+        await queue_worker.stop()
         await bot.session.close()
 
 

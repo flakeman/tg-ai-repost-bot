@@ -79,6 +79,17 @@
   - Нельзя перевести в `PUBLISHED` без явного вызова метода `approve()`.
   - Если генерация картинки падает с ошибкой, агрегат сохраняет `image = None` и флаг предупреждения, позволяя продолжить публикацию только текста.
 
+### 3.3 Aggregate / Entity: `UserSettings`
+- **ID:** `user_id: int` (Telegram ID пользователя/админа)
+- **Fields:**
+  - `user_id: int`
+  - `preferred_tone: Tone` (по умолчанию `Tone.DYNAMIC`)
+  - `preferred_image_model: str | None`
+  - `updated_at: datetime`
+- **Invariants:**
+  - `user_id` должен быть положительным числом.
+  - Изменение настроек автоматически актуализирует `updated_at`.
+
 ---
 
 ## 4. Domain Events
@@ -91,13 +102,22 @@
 - `JobRegenerateRequestedEvent(job_id, target: "text" | "image")`
 - `JobPublishedEvent(job_id, channel_message_id)`
 - `JobFailedEvent(job_id, reason)`
+- `UserSettingsUpdatedEvent(user_id, tone, image_model)`
 
 ---
 
 ## 5. Domain Interfaces (Ports)
 - `IArticleExtractor`:
   - `async def extract(url: str) -> tuple[str, str]` (title, body)
-  - `async def extract_with_url(url: str) -> tuple[str, str, str]` (title, body, final_source_url) — поддерживает разворачивание `t.me/<channel>/<id>` и поиск ссылок на первоисточники (Хабр и др.)
+  - `async def extract_with_url(url: str) -> tuple[str, str, str]` (title, body, final_source_url) — поддерживает разворачивание `t.me/<channel>/<id>` и поиск ссылок на первоисточники (Хабр и др.), фоллбэк на Jina Reader при 403 / защите от ботов.
+- `ISettingsRepository`:
+  - `async def get_user_settings(user_id: int) -> UserSettings`
+  - `async def save_user_settings(settings: UserSettings) -> None`
+- `IJobQueue`:
+  - `async def enqueue(job_id: str) -> None`
+  - `async def dequeue() -> str`
+- `IStorageManager`:
+  - `def cleanup_expired_images(images_dir: str, max_age_days: int) -> int`
 - `ILLMRewriter`:
   - `async def rewrite(raw_text: str, tone: Tone) -> PostContent`
   - `async def rewrite_with_prompt(raw_text: str, tone: Tone, title_hint: str | None) -> tuple[PostContent, str | None]`

@@ -1,5 +1,5 @@
 import re
-from typing import Tuple
+from typing import Tuple, Optional
 from bs4 import BeautifulSoup
 import httpx
 import trafilatura
@@ -23,6 +23,20 @@ class TrafilaturaExtractor(IArticleExtractor):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
         }
+
+    async def _fetch_via_jina(self, url: str) -> Optional[Tuple[str, str, str]]:
+        try:
+            jina_url = f"https://r.jina.ai/{url}"
+            async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True) as client:
+                resp = await client.get(jina_url, headers={"X-No-Cache": "true", "Accept": "text/plain"})
+                if resp.status_code == 200 and len(resp.text) > 50:
+                    lines = [ln.strip() for ln in resp.text.split("\n") if ln.strip()]
+                    title = lines[0].lstrip("#").strip() if lines else "Новость"
+                    body = resp.text[:25_000]
+                    return title, body, url
+        except Exception:
+            pass
+        return None
 
     async def extract(self, url: str) -> Tuple[str, str]:
         title, body, _ = await self.extract_with_url(url)
@@ -87,15 +101,23 @@ class TrafilaturaExtractor(IArticleExtractor):
             except Exception:
                 pass  # Fallback to normal URL fetching
 
+        html = ""
+        final_url = url
         try:
             async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, headers=self.headers) as client:
                 response = await client.get(url)
-                if response.status_code >= 400:
-                    raise ExtractionError(f"HTTP error {response.status_code} while fetching {url}")
-                html = response.text
-                final_url = str(response.url)
-        except httpx.RequestError as exc:
-            raise ExtractionError(f"Network error requesting {url}: {exc}") from exc
+                if response.status_code < 400:
+                    html = response.text
+                    final_url = str(response.url)
+        except httpx.RequestError:
+            pass
+
+        # If direct request failed (e.g. 403 Cloudflare/bot-defense), attempt Jina Reader proxy fallback
+        if not html:
+            jina_res = await self._fetch_via_jina(url)
+            if jina_res:
+                return jina_res
+            raise ExtractionError(f"Network or HTTP error fetching {url}")
 
         # Guard against massive HTML payloads (SPAs, binary dumps, huge datasets)
         # Cap HTML input to 1.5MB to avoid memory exhaustion and lxml stalls
@@ -143,6 +165,9 @@ class TrafilaturaExtractor(IArticleExtractor):
         body = body.strip() if body else ""
 
         if not body or len(body) < 30:
+            jina_res = await self._fetch_via_jina(url)
+            if jina_res:
+                return jina_res
             raise ExtractionError("Unable to extract meaningful article content from the URL")
 
         # Clean multiple empty lines
