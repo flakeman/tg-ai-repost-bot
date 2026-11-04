@@ -47,6 +47,20 @@ def test_robust_json_parser_regex_fallback():
     assert "Line 1" in res["body"]
 
 
+def test_robust_json_parser_with_inner_code_blocks():
+    # Payload with markdown code block inside "body"
+    payload = '''{
+        "title": "Ghostty: у ИИ нет прав на PR",
+        "body": "**AGENTS.md Ghostty** — инструкция:\\n\\n```\\nzig build\\n-Demit-macos-app=false\\nzig\\n```\\nКонец.",
+        "hashtags": ["#ghostty", "#ai"]
+    }'''
+    res = RobustJsonParser.parse(payload)
+    assert res["title"] == "Ghostty: у ИИ нет прав на PR"
+    assert "zig build" in res["body"]
+    assert "```" in res["body"]
+    assert res["hashtags"] == ["#ghostty", "#ai"]
+
+
 def test_storage_manager_cleanup(tmp_path):
     images_dir = tmp_path / "images"
     images_dir.mkdir()

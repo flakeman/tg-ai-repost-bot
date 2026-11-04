@@ -15,15 +15,16 @@ class RobustJsonParser:
         """
         text = raw_content.strip()
 
-        # 1. Strip markdown fences
-        if "```" in text:
-            # Extract content within ```json ... ``` or ``` ... ```
-            match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-            if match:
-                text = match.group(1).strip()
-            else:
-                text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
-                text = re.sub(r"\s*```$", "", text, flags=re.MULTILINE)
+        # 1. Strip markdown fences ONLY if text is wrapped in them
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*\r?\n?", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\r?\n?\s*```\s*$", "", text)
+            text = text.strip()
+        elif "```json" in text:
+            # Extra text before fence: e.g. "Sure, here is the JSON:\n```json\n{...}\n```"
+            m = re.search(r"```(?:json)?\s*\r?\n?(\{[\s\S]*?\})\r?\n?\s*```", text, flags=re.IGNORECASE)
+            if m:
+                text = m.group(1).strip()
 
         # 2. Try standard json.loads
         try:
@@ -39,7 +40,21 @@ class RobustJsonParser:
         except json.JSONDecodeError:
             pass
 
-        # 4. Regex fallback extraction of standard keys
+        # 4. Try extracting from outermost '{' to '}'
+        first_brace = text.find("{")
+        last_brace = text.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            sub = text[first_brace:last_brace + 1]
+            try:
+                return json.loads(sub)
+            except json.JSONDecodeError:
+                sub_clean = re.sub(r",\s*([\]}])", r"\1", sub)
+                try:
+                    return json.loads(sub_clean)
+                except json.JSONDecodeError:
+                    pass
+
+        # 5. Regex fallback extraction of standard keys
         logger.warning("Standard JSON parsing failed, attempting regex fallback on content: %s", raw_content[:150])
         result = {}
 
