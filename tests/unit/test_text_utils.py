@@ -1,4 +1,31 @@
-from src.presentation.text_utils import split_telegram_message
+from src.presentation.text_utils import (
+    split_telegram_message,
+    convert_markdown_to_telegram_html,
+    strip_html_tags,
+)
+
+
+def test_convert_markdown_to_telegram_html_escapes_raw_angles():
+    raw = "В двух кейсах — УПД с количеством <0,005 и онлайн-платежи — патч `EF_00.cfe`: **точно**."
+    converted = convert_markdown_to_telegram_html(raw)
+    assert "&lt;0,005" in converted
+    assert "<code>EF_00.cfe</code>" in converted
+    assert "<b>точно</b>" in converted
+    assert "<0,005" not in converted
+
+
+def test_convert_markdown_to_telegram_html_preserves_valid_tags():
+    raw = "Текст с <b>жирным</b> и <a href='https://t.me'>ссылкой</a> и формулой x < 5."
+    converted = convert_markdown_to_telegram_html(raw)
+    assert "<b>жирным</b>" in converted
+    assert "href=" in converted
+    assert "x &lt; 5" in converted
+
+
+def test_strip_html_tags():
+    html_text = "<b>Заголовок</b> &lt;0,005&gt; <a href='http://x.com'>ссылка</a>"
+    plain = strip_html_tags(html_text)
+    assert plain == "Заголовок <0,005> ссылка"
 
 
 def test_split_telegram_message_short():

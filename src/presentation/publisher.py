@@ -2,10 +2,11 @@ import logging
 from typing import Optional
 from aiogram import Bot
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import FSInputFile
 from src.domain.interfaces import IPublisher
 from src.domain.models import PostContent, ImageAsset
-from src.presentation.text_utils import split_telegram_message
+from src.presentation.text_utils import split_telegram_message, strip_html_tags
 
 logger = logging.getLogger(__name__)
 
@@ -28,25 +29,44 @@ class TelegramPublisher(IPublisher):
             photo_target = get_photo_target(image.image_url)
             # Ensure text fits Telegram 1024-character photo caption limit for unified message
             caption_text = draft.render_post(max_length=1024)
-            msg = await self.bot.send_photo(
-                chat_id=channel_id,
-                photo=photo_target,
-                caption=caption_text,
-                parse_mode=ParseMode.HTML,
-            )
-            return msg.message_id
+            try:
+                msg = await self.bot.send_photo(
+                    chat_id=channel_id,
+                    photo=photo_target,
+                    caption=caption_text,
+                    parse_mode=ParseMode.HTML,
+                )
+                return msg.message_id
+            except TelegramBadRequest as err:
+                logger.warning("publish_to_channel photo HTML parse error: %s. Falling back to plain text.", err)
+                msg = await self.bot.send_photo(
+                    chat_id=channel_id,
+                    photo=photo_target,
+                    caption=strip_html_tags(caption_text)[:1024],
+                    parse_mode=None,
+                )
+                return msg.message_id
 
         # Plain text post without image
         post_text = draft.render_post()
         chunks = split_telegram_message(post_text, max_length=4000)
         first_msg = None
         for chunk in chunks:
-            msg = await self.bot.send_message(
-                chat_id=channel_id,
-                text=chunk,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-            )
+            try:
+                msg = await self.bot.send_message(
+                    chat_id=channel_id,
+                    text=chunk,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+            except TelegramBadRequest as err:
+                logger.warning("publish_to_channel text HTML parse error: %s. Falling back to plain text.", err)
+                msg = await self.bot.send_message(
+                    chat_id=channel_id,
+                    text=strip_html_tags(chunk),
+                    parse_mode=None,
+                    disable_web_page_preview=True,
+                )
             if first_msg is None:
                 first_msg = msg
         return first_msg.message_id if first_msg else 0

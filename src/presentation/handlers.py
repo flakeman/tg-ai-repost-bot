@@ -342,6 +342,14 @@ async def handle_incoming_content(
     job, is_duplicate = await orchestrator.submit_content(user_id, content, active_tone)
 
     if is_duplicate:
+        if job.status == JobStatus.AWAITING_APPROVAL and job.draft:
+            await message.reply(
+                "ℹ️ <b>Этот материал уже подготовлен и ожидает вашего решения!</b>\nОтправляю карточку поста повторно:",
+                parse_mode=ParseMode.HTML,
+            )
+            await send_draft_preview(bot, message.chat.id, job)
+            return
+
         await message.reply(
             f"⚠️ <b>Этот материал уже обрабатывался!</b>\n\n"
             f"ID задачи: <code>{job.id}</code>\n"

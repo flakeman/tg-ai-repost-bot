@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import html
 import re
 import uuid
 from datetime import datetime, timezone
@@ -109,7 +110,7 @@ class PostContent(BaseModel):
         """
         from src.presentation.text_utils import convert_markdown_to_telegram_html
 
-        clean_title = self.title.strip().replace("**", "").replace("<b>", "").replace("</b>", "")
+        clean_title = html.escape(self.title.strip().replace("**", "").replace("<b>", "").replace("</b>", ""))
         header = f"<b>{clean_title}</b>"
         source_part = f'<a href="{self.source_url}">🔗 Источник</a>' if self.source_url else ""
         raw_body = convert_markdown_to_telegram_html(self.body.strip())

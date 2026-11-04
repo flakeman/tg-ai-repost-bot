@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 from typing import Optional, NamedTuple
 from aiogram import Bot
@@ -74,26 +75,37 @@ class PipelineQueueWorker:
                         except Exception as edit_err:
                             logger.warning("Failed to edit error message: %s", edit_err)
                 else:
-                    # Remove status message
+                    # Deliver interactive preview first
+                    await send_draft_preview(self.bot, item.chat_id, processed_job)
+                    logger.info("Worker #%d successfully delivered preview for job %s", worker_id, item.job_id)
+
+                    # Remove status message after successful preview delivery
                     if item.status_message_id:
                         try:
                             await self.bot.delete_message(chat_id=item.chat_id, message_id=item.status_message_id)
                         except Exception:
                             pass
 
-                    # Deliver interactive preview
-                    await send_draft_preview(self.bot, item.chat_id, processed_job)
-                    logger.info("Worker #%d successfully delivered preview for job %s", worker_id, item.job_id)
-
             except Exception as exc:
                 logger.error("Worker #%d unhandled error processing job %s: %s", worker_id, item.job_id, exc, exc_info=True)
+                err_text = f"❌ <b>Непредвиденная ошибка при обработке:</b>\n<code>{html.escape(str(exc)[:300])}</code>"
+                delivered = False
                 if item.status_message_id:
                     try:
                         await self.bot.edit_message_text(
                             chat_id=item.chat_id,
                             message_id=item.status_message_id,
-                            text=f"❌ <b>Непредвиденная ошибка:</b>\n<code>{str(exc)[:200]}</code>",
+                            text=err_text,
                             parse_mode=ParseMode.HTML,
+                        )
+                        delivered = True
+                    except Exception:
+                        pass
+                if not delivered:
+                    try:
+                        await self.bot.send_message(
+                            chat_id=item.chat_id,
+                            text=f"❌ Ошибка конвейера при обработке: {str(exc)[:300]}",
                         )
                     except Exception:
                         pass

@@ -1,10 +1,12 @@
+import html
 import logging
 from aiogram import Bot
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import FSInputFile
 from src.domain.models import PublishingJob
 from src.presentation.keyboards import build_approval_keyboard
-from src.presentation.text_utils import split_telegram_message
+from src.presentation.text_utils import split_telegram_message, strip_html_tags
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,7 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
     """
     Sends interactive preview of the post to the author's direct messages.
     If image exists, sends photo with caption and keyboard in ONE single message.
+    Includes automatic fallback to plain-text rendering if Telegram HTML parser fails.
     """
     kb = build_approval_keyboard(job.id)
 
@@ -26,14 +29,25 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
         photo_target = get_photo_target(job.image.image_url)
         post_caption = job.draft.render_post(max_length=1024) if job.draft else "Черновик не сформирован"
 
-        # Send photo and post text together in ONE message
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo_target,
-            caption=post_caption,
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb,
-        )
+        # Send photo and post text together in ONE message with HTML parser fallback
+        try:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_target,
+                caption=post_caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb,
+            )
+        except TelegramBadRequest as err:
+            logger.warning("send_photo HTML parse error: %s. Falling back to plain text.", err)
+            plain_caption = strip_html_tags(post_caption)[:1024]
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_target,
+                caption=plain_caption,
+                parse_mode=None,
+                reply_markup=kb,
+            )
 
         # Send concept suggestions as a supplementary info message
         if job.draft and job.draft.image_prompts:
@@ -41,19 +55,29 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
             for p in job.draft.image_prompts:
                 clean_p = p.strip()
                 if clean_p:
+                    escaped_p = html.escape(clean_p)
                     prompts_formatted.append(
-                        clean_p
-                        if clean_p.startswith(("🎨", "📊", "📸", "⚡", "•", "1", "2", "3", "4"))
-                        else f"• {clean_p}"
+                        escaped_p
+                        if escaped_p.startswith(("🎨", "📊", "📸", "⚡", "•", "1", "2", "3", "4"))
+                        else f"• {escaped_p}"
                     )
             if prompts_formatted:
                 prompts_text = "<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=prompts_text,
-                    parse_mode=ParseMode.HTML,
-                    disable_web_page_preview=True,
-                )
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=prompts_text,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True,
+                    )
+                except TelegramBadRequest as err:
+                    logger.warning("prompts_text HTML parse error: %s. Falling back to plain text.", err)
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=strip_html_tags(prompts_text),
+                        parse_mode=None,
+                        disable_web_page_preview=True,
+                    )
         return
 
     # Text-only preview (no image)
@@ -65,10 +89,11 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
         for p in job.draft.image_prompts:
             clean_p = p.strip()
             if clean_p:
+                escaped_p = html.escape(clean_p)
                 prompts_formatted.append(
-                    clean_p
-                    if clean_p.startswith(("🎨", "📊", "📸", "⚡", "•", "1", "2", "3", "4"))
-                    else f"• {clean_p}"
+                    escaped_p
+                    if escaped_p.startswith(("🎨", "📊", "📸", "⚡", "•", "1", "2", "3", "4"))
+                    else f"• {escaped_p}"
                 )
         if prompts_formatted:
             full_text += "\n\n<b>🎨 Варианты генерации обложки:</b>\n" + "\n".join(prompts_formatted)
@@ -76,10 +101,20 @@ async def send_draft_preview(bot: Bot, chat_id: int, job: PublishingJob) -> None
     chunks = split_telegram_message(full_text, max_length=4000)
     for i, chunk in enumerate(chunks):
         is_last = (i == len(chunks) - 1)
-        await bot.send_message(
-            chat_id=chat_id,
-            text=chunk,
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb if is_last else None,
-            disable_web_page_preview=True,
-        )
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=chunk,
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb if is_last else None,
+                disable_web_page_preview=True,
+            )
+        except TelegramBadRequest as err:
+            logger.warning("send_message HTML parse error: %s. Falling back to plain text.", err)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=strip_html_tags(chunk),
+                parse_mode=None,
+                reply_markup=kb if is_last else None,
+                disable_web_page_preview=True,
+            )
