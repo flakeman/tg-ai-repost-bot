@@ -8,7 +8,7 @@ from src.application.orchestrator import PipelineOrchestrator
 from src.application.queue import PipelineQueueWorker
 from src.config.settings import Settings
 from src.domain.interfaces import ISettingsRepository
-from src.domain.models import Tone, PublishingJob
+from src.domain.models import Tone, PublishingJob, ImageAsset
 from src.infrastructure.storage_manager import StorageManager
 from src.presentation.preview import get_photo_target, send_draft_preview
 from src.presentation.keyboards import (
