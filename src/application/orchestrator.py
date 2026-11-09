@@ -136,20 +136,24 @@ class PipelineOrchestrator:
             job.set_draft(draft)
             await self.repository.save(job)
 
-            # Step 3: Image Generation
+            # Step 3: Image Generation (Always generate fresh AI artwork, ADR-019)
             job.status = JobStatus.GENERATING_IMAGE
             await self.repository.save(job)
 
-            if job.image and job.image.image_url and not job.image.is_placeholder:
-                logger.info("Job %s already has a valid image (%s). Retaining original image.", job.id, job.image.image_url)
-            else:
-                prompt_for_image = img_prompt or f"Editorial illustration for news: {draft.title}"
-                try:
-                    image_asset = await self.image_generator.generate(prompt_for_image)
-                except Exception as img_err:
-                    logger.warning("Image generator failed: %s. Using placeholder.", img_err)
-                    image_asset = ImageAsset(image_url=None, prompt_used=prompt_for_image, is_placeholder=True)
-                job.set_image(image_asset)
+            fallback_existing_image = job.image if (job.image and job.image.image_url and not job.image.is_placeholder) else None
+            prompt_for_image = img_prompt or (draft.image_prompts[0] if draft.image_prompts else None) or f"Editorial illustration for news: {draft.title}"
+
+            try:
+                image_asset = await self.image_generator.generate(prompt_for_image)
+            except Exception as img_err:
+                logger.warning("Image generator failed: %s", img_err)
+                image_asset = fallback_existing_image or ImageAsset(image_url=None, prompt_used=prompt_for_image, is_placeholder=True)
+
+            if image_asset.is_placeholder and fallback_existing_image:
+                logger.info("Image generation produced placeholder, falling back to forwarded media.")
+                image_asset = fallback_existing_image
+
+            job.set_image(image_asset)
 
             # Step 4: Ready for Human Approval
             job.mark_awaiting_approval()
@@ -189,13 +193,31 @@ class PipelineOrchestrator:
     async def regenerate_image(self, job_id: str, custom_prompt: Optional[str] = None) -> PublishingJob:
         """
         Regenerates cover image for an awaiting approval job.
+        Cycles through draft prompts or selects a fresh prompt if none specified (ADR-019).
         """
         job = await self.repository.get_by_id(job_id)
         if not job or not job.draft:
             raise ValueError("Invalid job or draft missing")
 
-        prompt = custom_prompt or (job.image.prompt_used if job.image else None) or f"News cover for: {job.draft.title}"
+        if custom_prompt:
+            prompt = custom_prompt
+        elif job.draft.image_prompts:
+            prompts = [p.strip() for p in job.draft.image_prompts if p.strip()]
+            current_prompt = job.image.prompt_used if job.image else None
+            # If current prompt matches one in list, cycle to next prompt
+            if current_prompt in prompts and len(prompts) > 1:
+                curr_idx = prompts.index(current_prompt)
+                prompt = prompts[(curr_idx + 1) % len(prompts)]
+            elif prompts:
+                prompt = prompts[0]
+            else:
+                prompt = f"Editorial illustration for news: {job.draft.title}"
+        else:
+            prompt = f"Editorial illustration for news: {job.draft.title}"
+
         image_asset = await self.image_generator.generate(prompt)
+        if not image_asset.prompt_used or image_asset.prompt_used == "image prompt":
+            image_asset.prompt_used = prompt
         job.set_image(image_asset)
         job.status = JobStatus.AWAITING_APPROVAL
         await self.repository.save(job)

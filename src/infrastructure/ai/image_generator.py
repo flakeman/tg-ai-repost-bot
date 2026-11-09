@@ -150,6 +150,7 @@ class PollinationsImageGenerator(IImageGenerator):
         os.makedirs(self.images_dir, exist_ok=True)
 
     async def generate(self, prompt: str) -> ImageAsset:
+        import random
         import urllib.parse
         raw_prompt = prompt.strip()
         sanitized = sanitize_image_prompt(raw_prompt)
@@ -159,9 +160,10 @@ class PollinationsImageGenerator(IImageGenerator):
             full_prompt = sanitized
 
         encoded_prompt = urllib.parse.quote(full_prompt[:500])
-        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        seed = random.randint(1, 2147483647)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true&seed={seed}&model=flux"
 
-        logger.info("Generating fallback image via Pollinations AI...")
+        logger.info("Generating fallback image via Pollinations AI (seed: %d)...", seed)
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.get(url, follow_redirects=True)

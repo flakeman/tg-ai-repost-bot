@@ -20,7 +20,7 @@ async def setup_pipeline(tmp_path):
     rewriter.rewrite_with_prompt = AsyncMock(return_value=(draft, "image prompt for visual"))
 
     image_gen = MagicMock()
-    image_gen.generate = AsyncMock(return_value=ImageAsset(image_url="http://img.com/1.png", prompt_used="image prompt"))
+    image_gen.generate = AsyncMock(side_effect=lambda p: ImageAsset(image_url="http://img.com/1.png", prompt_used=p))
 
     publisher = MagicMock()
     publisher.publish_to_channel = AsyncMock(return_value=12345)
@@ -133,7 +133,7 @@ async def test_retry_failed_job_resets_status(setup_pipeline):
 
 
 @pytest.mark.asyncio
-async def test_process_pipeline_preserves_forwarded_image(setup_pipeline):
+async def test_process_pipeline_generates_fresh_ai_image_and_uses_forwarded_as_fallback(setup_pipeline):
     orchestrator, repo, _ = setup_pipeline
 
     job, _ = await orchestrator.submit_content(user_id=1, source_input="https://tech.com/news/with_photo")
@@ -141,8 +141,39 @@ async def test_process_pipeline_preserves_forwarded_image(setup_pipeline):
     job.set_image(ImageAsset(image_url="storage/images/fwd_test.jpg", is_placeholder=False))
     await repo.save(job)
 
+    # 1. Image generator succeeds -> produces fresh AI artwork (ADR-019)
     processed_job = await orchestrator.process_pipeline(job.id)
     assert processed_job.status == JobStatus.AWAITING_APPROVAL
-    # Image must remain the original forwarded photo, not overwritten by mock generator
-    assert processed_job.image.image_url == "storage/images/fwd_test.jpg"
+    assert processed_job.image.image_url == "http://img.com/1.png"
+    assert not processed_job.image.is_placeholder
+
+    # 2. When generator produces placeholder or fails -> falls back to forwarded image
+    class FailingGenerator:
+        async def generate(self, prompt: str):
+            return ImageAsset(image_url=None, prompt_used=prompt, is_placeholder=True)
+
+    orchestrator.image_generator = FailingGenerator()
+    job2, _ = await orchestrator.submit_content(user_id=1, source_input="https://tech.com/news/with_photo_fallback")
+    job2.set_image(ImageAsset(image_url="storage/images/fwd_test2.jpg", is_placeholder=False))
+    await repo.save(job2)
+
+    processed_job2 = await orchestrator.process_pipeline(job2.id)
+    assert processed_job2.status == JobStatus.AWAITING_APPROVAL
+    assert processed_job2.image.image_url == "storage/images/fwd_test2.jpg"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_image_cycles_prompts(setup_pipeline):
+    orchestrator, repo, _ = setup_pipeline
+    job, _ = await orchestrator.submit_content(user_id=1, source_input="https://tech.com/news/regen")
+    job = await orchestrator.process_pipeline(job.id)
+
+    # Ensure draft has multiple prompts
+    job.draft.image_prompts = ["Concept 1: Isometric 3D", "Concept 2: Cyberpunk neon", "Concept 3: Minimalist vector"]
+    job.image.prompt_used = "Concept 1: Isometric 3D"
+    await repo.save(job)
+
+    # Calling regenerate_image without custom prompt should cycle to Concept 2
+    regen_job = await orchestrator.regenerate_image(job.id)
+    assert regen_job.image.prompt_used == "Concept 2: Cyberpunk neon"
 
