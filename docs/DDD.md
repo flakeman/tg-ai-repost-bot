@@ -129,3 +129,10 @@
   - `async def get_pending_jobs() -> list[PublishingJob]`
 - `IPublisher`: `async def publish_to_channel(channel_id: str, draft: PostContent, image: ImageAsset | None) -> int` (поддерживает `FSInputFile` для локальных файлов и URL для удаленных, с отправкой единого сообщения «фото + подпись» до 1024 символов)
 - `split_telegram_message`: Presentation helper для деления текста на сообщения до 4000 символов по границам параграфов (для текстовых постов).
+
+---
+
+## 6. Resilience & State Invariants (ADR-017)
+- **Retry Invariant for Failed Jobs:** Если агрегат `PublishingJob` находился в терминальном статусе `FAILED` или промежуточных незавершённых статусах (`EXTRACTING`, `REWRITING`, `GENERATING_IMAGE`), повторный вызов метода `submit_content` сбрасывает статус агрегата в `PENDING`, очищает `error_message = None`, обновляет `tone` и `updated_at`, переводя задачу на повторную обработку (`is_duplicate = False`).
+- **Forwarded Media Invariant:** При поступлении пересланного сообщения с медиа (`photo`), исходное изображение сохраняется локально как `ImageAsset` и привязывается к задаче до этапа генерации, исключая потерю оригинальных иллюстраций.
+- **Unified Single-Bubble Presentation:** Все публикации с изображением оформляются строго единым сообщением `send_photo` с подписью до 1024 символов как в ЛС модератора, так и в целевом канале.

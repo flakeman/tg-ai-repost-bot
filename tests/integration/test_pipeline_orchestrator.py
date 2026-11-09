@@ -106,3 +106,43 @@ async def test_reject_job_flow(setup_pipeline):
 
     rejected_job = await orchestrator.reject_job(job.id)
     assert rejected_job.status == JobStatus.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_job_resets_status(setup_pipeline):
+    orchestrator, repo, _ = setup_pipeline
+
+    job, is_dup = await orchestrator.submit_content(user_id=1, source_input="Content that will fail")
+    assert is_dup is False
+
+    # Simulate job failure (e.g. LLM quota error)
+    job.fail("Error 402: Quota exceeded")
+    await repo.save(job)
+    assert job.status == JobStatus.FAILED
+    assert job.error_message == "Error 402: Quota exceeded"
+
+    # Resubmitting the same content should allow retry, resetting to PENDING
+    retry_job, is_dup_retry = await orchestrator.submit_content(
+        user_id=1, source_input="Content that will fail", tone=Tone.FORMAL
+    )
+    assert is_dup_retry is False
+    assert retry_job.id == job.id
+    assert retry_job.status == JobStatus.PENDING
+    assert retry_job.error_message is None
+    assert retry_job.tone == Tone.FORMAL
+
+
+@pytest.mark.asyncio
+async def test_process_pipeline_preserves_forwarded_image(setup_pipeline):
+    orchestrator, repo, _ = setup_pipeline
+
+    job, _ = await orchestrator.submit_content(user_id=1, source_input="https://tech.com/news/with_photo")
+    # Attach a forwarded image beforehand
+    job.set_image(ImageAsset(image_url="storage/images/fwd_test.jpg", is_placeholder=False))
+    await repo.save(job)
+
+    processed_job = await orchestrator.process_pipeline(job.id)
+    assert processed_job.status == JobStatus.AWAITING_APPROVAL
+    # Image must remain the original forwarded photo, not overwritten by mock generator
+    assert processed_job.image.image_url == "storage/images/fwd_test.jpg"
+

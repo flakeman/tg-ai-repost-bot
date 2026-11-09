@@ -118,7 +118,7 @@ async def main():
 
     logger.info("Starting Telegram Bot long-polling for channel: %s", settings.channel_id)
     try:
-        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.delete_webhook(drop_pending_updates=False)
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
         await queue_worker.stop()

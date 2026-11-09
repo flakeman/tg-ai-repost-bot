@@ -59,10 +59,14 @@ class PipelineOrchestrator:
             # If previous job failed or got interrupted/crashed (e.g. still in EXTRACTING or FAILED), allow retrying it
             if existing.status in (JobStatus.EXTRACTING, JobStatus.REWRITING, JobStatus.GENERATING_IMAGE, JobStatus.FAILED):
                 logger.info(
-                    "Found existing incomplete job %s (status: %s). Allowing retry.",
+                    "Found existing incomplete/failed job %s (status: %s). Resetting to PENDING for retry.",
                     existing.id,
                     existing.status.value,
                 )
+                existing.status = JobStatus.PENDING
+                existing.error_message = None
+                existing.tone = tone
+                await self.repository.save(existing)
                 return existing, False
             logger.info("Found existing job %s for content hash %s", existing.id, c_hash)
             return existing, True
@@ -136,14 +140,16 @@ class PipelineOrchestrator:
             job.status = JobStatus.GENERATING_IMAGE
             await self.repository.save(job)
 
-            prompt_for_image = img_prompt or f"Editorial illustration for news: {draft.title}"
-            try:
-                image_asset = await self.image_generator.generate(prompt_for_image)
-            except Exception as img_err:
-                logger.warning("Image generator failed: %s. Using placeholder.", img_err)
-                image_asset = ImageAsset(image_url=None, prompt_used=prompt_for_image, is_placeholder=True)
-
-            job.set_image(image_asset)
+            if job.image and job.image.image_url and not job.image.is_placeholder:
+                logger.info("Job %s already has a valid image (%s). Retaining original image.", job.id, job.image.image_url)
+            else:
+                prompt_for_image = img_prompt or f"Editorial illustration for news: {draft.title}"
+                try:
+                    image_asset = await self.image_generator.generate(prompt_for_image)
+                except Exception as img_err:
+                    logger.warning("Image generator failed: %s. Using placeholder.", img_err)
+                    image_asset = ImageAsset(image_url=None, prompt_used=prompt_for_image, is_placeholder=True)
+                job.set_image(image_asset)
 
             # Step 4: Ready for Human Approval
             job.mark_awaiting_approval()

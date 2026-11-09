@@ -284,6 +284,15 @@ async def handle_incoming_content(
     queue_worker: Optional[PipelineQueueWorker] = None,
 ):
     user_id = message.from_user.id
+    logger.info(
+        "Incoming content from user %s in chat %s (msg_id: %s, text_len: %d, has_photo: %s, has_forward: %s)",
+        user_id,
+        message.chat.id,
+        message.message_id,
+        len(message.text or message.caption or ""),
+        bool(message.photo),
+        bool(getattr(message, "forward_origin", None) or getattr(message, "forward_from_chat", None)),
+    )
     if not is_authorized(user_id, settings):
         await message.answer("⛔ Доступ ограничен.")
         return
@@ -340,6 +349,19 @@ async def handle_incoming_content(
 
     # Ingestion & Dedup check
     job, is_duplicate = await orchestrator.submit_content(user_id, content, active_tone)
+
+    if not is_duplicate and message.photo:
+        largest_photo = message.photo[-1]
+        try:
+            import os
+            os.makedirs("storage/images", exist_ok=True)
+            local_photo_path = f"storage/images/fwd_{job.id}.jpg"
+            await bot.download(largest_photo.file_id, destination=local_photo_path)
+            job.set_image(ImageAsset(image_url=local_photo_path, prompt_used="forwarded telegram media", is_placeholder=False))
+            await orchestrator.repository.save(job)
+            logger.info("Preserved incoming photo for job %s: %s", job.id, local_photo_path)
+        except Exception as photo_err:
+            logger.warning("Could not download incoming photo for job %s: %s", job.id, photo_err)
 
     if is_duplicate:
         if job.status == JobStatus.AWAITING_APPROVAL and job.draft:
