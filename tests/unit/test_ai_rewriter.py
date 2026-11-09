@@ -1,4 +1,5 @@
 import json
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from src.domain.models import Tone, PostContent
@@ -81,3 +82,59 @@ async def test_mock_image_generator():
     asset = await gen.generate("any prompt")
     assert asset.image_url == "https://placeholder.com/mock.png"
     assert asset.is_placeholder is True
+
+
+@pytest.mark.asyncio
+async def test_composite_image_generator_fallback(tmp_path):
+    from src.infrastructure.ai.image_generator import CompositeImageGenerator
+    from src.domain.models import ImageAsset
+
+    primary_mock = MagicMock()
+    # Simulate primary failure (403 model_not_allowed)
+    primary_mock.generate = AsyncMock(return_value=ImageAsset(image_url=None, prompt_used="p", is_placeholder=True))
+
+    fallback_mock = MagicMock()
+    fallback_mock.generate = AsyncMock(
+        return_value=ImageAsset(image_url=str(tmp_path / "pol.jpg"), prompt_used="p", is_placeholder=False)
+    )
+
+    composite = CompositeImageGenerator(primary=primary_mock, fallback=fallback_mock)
+    asset = await composite.generate("editorial illustration prompt")
+
+    assert primary_mock.generate.called
+    assert fallback_mock.generate.called
+    assert asset.is_placeholder is False
+    assert asset.image_url.endswith("pol.jpg")
+
+
+@pytest.mark.asyncio
+async def test_pollinations_image_generator_success(tmp_path, monkeypatch):
+    from src.infrastructure.ai.image_generator import PollinationsImageGenerator
+    from src.domain.models import ImageAsset
+    import httpx
+
+    fake_bytes = b"\xff\xd8\xff" + b"0" * 2000
+
+    class FakeResponse:
+        status_code = 200
+        content = fake_bytes
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def get(self, url, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    gen = PollinationsImageGenerator(images_dir=str(tmp_path / "images"))
+    asset = await gen.generate("Cybersecurity AI prompt")
+
+    assert asset.is_placeholder is False
+    assert asset.image_url is not None
+    assert os.path.exists(asset.image_url)
+

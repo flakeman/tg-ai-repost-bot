@@ -11,7 +11,12 @@ from src.infrastructure.repositories import SqliteJobRepository, SqliteSettingsR
 from src.infrastructure.extractor import TrafilaturaExtractor
 from src.infrastructure.ai.llm_rewriter import OpenAIRewriter, DeepSeekRewriter
 from src.infrastructure.ai.composite import CompositeRewriter
-from src.infrastructure.ai.image_generator import DalleImageGenerator, MockImageGenerator
+from src.infrastructure.ai.image_generator import (
+    DalleImageGenerator,
+    PollinationsImageGenerator,
+    CompositeImageGenerator,
+    MockImageGenerator,
+)
 from src.infrastructure.storage_manager import StorageManager
 from src.presentation.publisher import TelegramPublisher
 from src.application.orchestrator import PipelineOrchestrator
@@ -65,16 +70,21 @@ def build_orchestrator(settings: Settings, bot: Bot) -> PipelineOrchestrator:
 
     composite_rewriter = CompositeRewriter(primary=primary, fallback=fallback)
 
-    # 4. Image Generator
+    # 4. Image Generator (Primary DALL-E + Autonomous Pollinations AI Fallback, ADR-018)
+    pollinations_gen = PollinationsImageGenerator(
+        style_modifier=settings.image_style,
+        images_dir="storage/images",
+    )
     if settings.image_provider == "dalle" and settings.openai_api_key:
-        image_gen = DalleImageGenerator(
+        dalle_gen = DalleImageGenerator(
             api_key=settings.openai_api_key,
             model=settings.dalle_model,
             style_modifier=settings.image_style,
             client=openai_llm.client,
         )
+        image_gen = CompositeImageGenerator(primary=dalle_gen, fallback=pollinations_gen)
     else:
-        image_gen = MockImageGenerator()
+        image_gen = CompositeImageGenerator(primary=MockImageGenerator(), fallback=pollinations_gen)
 
     # 5. Telegram Publisher
     publisher = TelegramPublisher(bot=bot)

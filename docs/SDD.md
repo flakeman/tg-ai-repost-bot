@@ -73,7 +73,7 @@
 - **Database:** SQLite 3 with WAL mode via `aiosqlite` with strict connection pooling & `busy_timeout = 5000`
 - **AI Clients:** OpenAI SDK (OpenAI API, DeepSeek API, and OpenAI-compatible gateways like `cheapvibecode.ru`)
 - **Scraper:** `trafilatura` + `httpx` + `beautifulsoup4` + `Jina Reader API fallback`
-- **Image Generation & Storage:** Multi-model fallback rotator (`gpt-image-2.5-flare`, `gpt-image-1`, `gpt-image-2`), `storage/images/` с TTL-очисткой
+- **Image Generation & Storage:** Двухуровневая генерация обложек: основной DALL-E/OpenAI rotator (`gpt-image-2`, `dall-e-3`) + автономный `PollinationsImageGenerator` (Flux/SD) fallback (ADR-018); хранилище `storage/images/` с TTL-очисткой 14 дней.
 - **Testing:** `pytest`, `pytest-asyncio`, `pytest-mock`
 
 ---
@@ -140,7 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON publishing_jobs(status);
 ### 6.2 Error & Fallback Scenarios
 - **Сбой парсинга URL:** Если `trafilatura` не смогла распарсить страницу, используется fallback на `BeautifulSoup`. При невозможности извлечь текст бот возвращает понятную ошибку и предлагает прислать скопированный текст.
 - **Сбой основного LLM API (Timeout/500/401):** Автоматический fallback на резервный провайдер через `CompositeRewriter`.
-- **Сбой Image API:** Бот логирует ошибку, генерирует черновик без изображения, сохраняя в сообщении предпросмотра 4 варианта идей для обложки, и позволяет опубликовать текст.
+- **Сбой Image API (ADR-018):** Если основной шлюз не поддерживает генерацию картинок (403 `model_not_allowed`) или исчерпал баланс, `CompositeImageGenerator` мгновенно и бесшовно переключается на автономный `PollinationsImageGenerator`. Если и резервный генератор недоступен, бот переходит на режим публикации текста с предложением 4 вариантов промптов.
 
 ---
 

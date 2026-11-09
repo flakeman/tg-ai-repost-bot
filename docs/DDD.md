@@ -121,7 +121,7 @@
 - `ILLMRewriter`:
   - `async def rewrite(raw_text: str, tone: Tone) -> PostContent`
   - `async def rewrite_with_prompt(raw_text: str, tone: Tone, title_hint: str | None) -> tuple[PostContent, str | None]`
-- `IImageGenerator`: `async def generate(prompt: str) -> ImageAsset` (поддерживает возвращение URL или сохранение base64 в `storage/images/*.png`)
+- `IImageGenerator`: `async def generate(prompt: str) -> ImageAsset` (поддерживает DALL-E/OpenAI, автономный резервный провайдер Pollinations AI и композитную маршрутизацию `CompositeImageGenerator` с автоматическим fallback при ошибках 403 / model_not_allowed)
 - `IJobRepository`:
   - `async def save(job: PublishingJob) -> None`
   - `async def get_by_id(job_id: str) -> PublishingJob | None`
@@ -136,3 +136,4 @@
 - **Retry Invariant for Failed Jobs:** Если агрегат `PublishingJob` находился в терминальном статусе `FAILED` или промежуточных незавершённых статусах (`EXTRACTING`, `REWRITING`, `GENERATING_IMAGE`), повторный вызов метода `submit_content` сбрасывает статус агрегата в `PENDING`, очищает `error_message = None`, обновляет `tone` и `updated_at`, переводя задачу на повторную обработку (`is_duplicate = False`).
 - **Forwarded Media Invariant:** При поступлении пересланного сообщения с медиа (`photo`), исходное изображение сохраняется локально как `ImageAsset` и привязывается к задаче до этапа генерации, исключая потерю оригинальных иллюстраций.
 - **Unified Single-Bubble Presentation:** Все публикации с изображением оформляются строго единым сообщением `send_photo` с подписью до 1024 символов как в ЛС модератора, так и в целевом канале.
+- **Autonomous Image Fallback Invariant (ADR-018):** Если основной шлюз генерации изображений возвращает ошибку отсутствия прав или неподдерживаемой модели (HTTP 403 `model_not_allowed`), композитный генератор автоматически перенаправляет запрос на независимый провайдер `PollinationsImageGenerator`, гарантируя наличие обложки у каждого поста.

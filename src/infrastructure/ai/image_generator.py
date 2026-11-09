@@ -133,6 +133,83 @@ class DalleImageGenerator(IImageGenerator):
         return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
 
 
+class PollinationsImageGenerator(IImageGenerator):
+    """
+    Autonomous fallback image generator using Pollinations.ai (Flux/SD).
+    Requires no API key and provides reliable editorial cover art generation.
+    """
+    def __init__(
+        self,
+        style_modifier: str = "modern minimalist, high quality digital editorial illustration",
+        images_dir: str = "storage/images",
+        timeout: float = 45.0,
+    ):
+        self.style_modifier = style_modifier
+        self.images_dir = images_dir
+        self.timeout = timeout
+        os.makedirs(self.images_dir, exist_ok=True)
+
+    async def generate(self, prompt: str) -> ImageAsset:
+        import urllib.parse
+        raw_prompt = prompt.strip()
+        sanitized = sanitize_image_prompt(raw_prompt)
+        if "Style:" not in sanitized and self.style_modifier:
+            full_prompt = f"{sanitized}. Style: {self.style_modifier}"
+        else:
+            full_prompt = sanitized
+
+        encoded_prompt = urllib.parse.quote(full_prompt[:500])
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+
+        logger.info("Generating fallback image via Pollinations AI...")
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.get(url, follow_redirects=True)
+                if resp.status_code == 200 and len(resp.content) > 1000:
+                    filename = f"gen_pol_{uuid.uuid4().hex[:12]}.jpg"
+                    filepath = os.path.join(self.images_dir, filename)
+                    with open(filepath, "wb") as f:
+                        f.write(resp.content)
+                    logger.info("Pollinations image successfully generated and saved: %s", filepath)
+                    return ImageAsset(image_url=filepath, prompt_used=full_prompt, is_placeholder=False)
+                else:
+                    logger.warning("Pollinations returned status %d (length %d)", resp.status_code, len(resp.content))
+        except Exception as exc:
+            logger.error("Pollinations image generation failed: %s", exc)
+
+        return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
+
+
+class CompositeImageGenerator(IImageGenerator):
+    """
+    Composite image generator implementing Tier 1 (primary, e.g. DALL-E)
+    with automatic Tier 2 fallback (e.g. Pollinations AI).
+    """
+    def __init__(self, primary: IImageGenerator, fallback: Optional[IImageGenerator] = None):
+        self.primary = primary
+        self.fallback = fallback
+
+    async def generate(self, prompt: str) -> ImageAsset:
+        try:
+            asset = await self.primary.generate(prompt)
+            if asset and asset.image_url and not asset.is_placeholder:
+                return asset
+            logger.info("Primary image generator returned placeholder. Attempting fallback...")
+        except Exception as exc:
+            logger.warning("Primary image generator failed: %s. Attempting fallback...", exc)
+
+        if self.fallback:
+            try:
+                fallback_asset = await self.fallback.generate(prompt)
+                if fallback_asset and fallback_asset.image_url and not fallback_asset.is_placeholder:
+                    logger.info("Fallback image generator succeeded: %s", fallback_asset.image_url)
+                    return fallback_asset
+            except Exception as fb_exc:
+                logger.error("Fallback image generator failed: %s", fb_exc)
+
+        return ImageAsset(image_url=None, prompt_used=prompt, is_placeholder=True)
+
+
 class MockImageGenerator(IImageGenerator):
     def __init__(self, default_image_url: Optional[str] = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1000&q=80"):
         self.default_image_url = default_image_url
