@@ -121,9 +121,13 @@ class DalleImageGenerator(IImageGenerator):
 
             except Exception as exc:
                 last_error = exc
-                logger.warning("Image generation attempt %d failed (model %s): %s. Retrying...", attempt + 1, current_model, exc)
+                logger.warning("Image generation attempt %d failed (model %s): %s.", attempt + 1, current_model, exc)
+                err_str = str(exc).lower()
+                if "model_not_allowed" in err_str or "403" in err_str or "not supported" in err_str or "unsupported" in err_str:
+                    logger.warning("Image generation not supported by provider, aborting retries.")
+                    break
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(3 * (attempt + 1))
+                    await asyncio.sleep(2 * (attempt + 1))
 
         logger.error("All image generation attempts failed. Last error: %s", last_error)
         return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
