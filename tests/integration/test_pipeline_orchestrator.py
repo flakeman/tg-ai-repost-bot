@@ -177,3 +177,44 @@ async def test_regenerate_image_cycles_prompts(setup_pipeline):
     regen_job = await orchestrator.regenerate_image(job.id)
     assert regen_job.image.prompt_used == "Concept 2: Cyberpunk neon"
 
+
+@pytest.mark.asyncio
+async def test_image_generation_integrates_article_keywords(setup_pipeline):
+    orchestrator, repo, _ = setup_pipeline
+    captured_prompts = []
+
+    class KeywordCapturingGenerator:
+        async def generate(self, prompt: str):
+            captured_prompts.append(prompt)
+            return ImageAsset(image_url="http://img.com/keyword_art.png", prompt_used=prompt, is_placeholder=False)
+
+    orchestrator.image_generator = KeywordCapturingGenerator()
+
+    # Configure rewriter to produce keywords
+    draft = PostContent(
+        title="USB Drive Vulnerability",
+        body="Security researchers cracked AES-256 USB keys",
+        hashtags=["#infosec"],
+        keywords=["USB hardware", "AES-256", "cryptographic keys"],
+        image_prompts=["3D render of hardware stick", "Cyberpunk terminal scan"],
+    )
+    orchestrator.rewriter.rewrite_with_prompt = AsyncMock(return_value=(draft, "Digital security concept"))
+
+    job, _ = await orchestrator.submit_content(user_id=1, source_input="https://habr.com/ru/articles/123456")
+    processed_job = await orchestrator.process_pipeline(job.id)
+
+    assert len(captured_prompts) >= 1
+    initial_prompt = captured_prompts[-1]
+    # Prompt must contain the article's key terms
+    assert "USB hardware" in initial_prompt
+    assert "AES-256" in initial_prompt
+    assert "cryptographic keys" in initial_prompt
+
+    # Test that regenerate_image also retains and injects the article keywords
+    regen_job = await orchestrator.regenerate_image(processed_job.id)
+    assert len(captured_prompts) >= 2
+    regen_prompt = captured_prompts[-1]
+    assert "USB hardware" in regen_prompt
+    assert "AES-256" in regen_prompt
+    assert "Key visual elements:" in regen_prompt
+

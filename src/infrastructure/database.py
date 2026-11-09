@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS publishing_jobs (
     is_image_placeholder BOOLEAN DEFAULT 0,
     source_url TEXT,
     image_prompts_json TEXT,
+    keywords_json TEXT,
     status TEXT NOT NULL,
     channel_message_id INTEGER,
     error_message TEXT,
@@ -68,4 +69,6 @@ async def init_db(db_path: str) -> None:
             await db.execute("ALTER TABLE publishing_jobs ADD COLUMN source_url TEXT;")
         if "image_prompts_json" not in columns:
             await db.execute("ALTER TABLE publishing_jobs ADD COLUMN image_prompts_json TEXT;")
+        if "keywords_json" not in columns:
+            await db.execute("ALTER TABLE publishing_jobs ADD COLUMN keywords_json TEXT;")
         await db.commit()

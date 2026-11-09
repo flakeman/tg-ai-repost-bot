@@ -84,6 +84,16 @@ class PostContent(BaseModel):
     hashtags: List[str] = Field(default_factory=list)
     source_url: Optional[str] = None
     image_prompts: List[str] = Field(default_factory=list)
+    keywords: List[str] = Field(default_factory=list)
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def clean_keywords(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            v = [k.strip() for k in v.split(",") if k.strip()]
+        if not isinstance(v, (list, tuple)):
+            return []
+        return [str(k).strip() for k in v if str(k).strip()]
 
     @field_validator("hashtags", mode="before")
     @classmethod

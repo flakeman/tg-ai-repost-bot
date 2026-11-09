@@ -21,7 +21,13 @@ async def test_save_and_retrieve_job_by_id(temp_repo):
     )
     job.start_extracting()
     job.set_extracted_content(title="Test Title", body="Original body text")
-    draft = PostContent(title="Rewritten Title", body="Rewritten body", hashtags=["#ai", "#news"])
+    draft = PostContent(
+        title="Rewritten Title",
+        body="Rewritten body",
+        hashtags=["#ai", "#news"],
+        keywords=["USB security", "AES-256"],
+        image_prompts=["Prompt 1", "Prompt 2"],
+    )
     job.set_draft(draft)
     image = ImageAsset(image_url="https://images.com/pic1.jpg", prompt_used="futuristic ai robot")
     job.set_image(image)
@@ -39,6 +45,8 @@ async def test_save_and_retrieve_job_by_id(temp_repo):
     assert retrieved.draft is not None
     assert retrieved.draft.title == "Rewritten Title"
     assert retrieved.draft.hashtags == ["#ai", "#news"]
+    assert retrieved.draft.keywords == ["USB security", "AES-256"]
+    assert retrieved.draft.image_prompts == ["Prompt 1", "Prompt 2"]
     assert retrieved.image is not None
     assert retrieved.image.image_url == "https://images.com/pic1.jpg"
 

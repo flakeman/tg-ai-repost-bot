@@ -83,6 +83,16 @@ class RobustJsonParser:
                 if t.strip() and t.strip().strip('"').strip("'").startswith("#")
             ]
 
+        # keywords list
+        m_keys = re.search(r'"keywords"\s*:\s*\[(.*?)\]', text, flags=re.DOTALL)
+        if m_keys:
+            keys_raw = m_keys.group(1)
+            result["keywords"] = [
+                k.strip().strip('"').strip("'")
+                for k in keys_raw.split(",")
+                if k.strip()
+            ]
+
         # image_prompt
         m_img = re.search(r'"image_prompt"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', text)
         if m_img:

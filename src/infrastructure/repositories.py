@@ -36,12 +36,21 @@ class SqliteJobRepository(IJobRepository):
                 except Exception:
                     image_prompts = []
 
+            # Retrieve keywords
+            keywords = []
+            if "keywords_json" in row.keys() and row["keywords_json"]:
+                try:
+                    keywords = json.loads(row["keywords_json"])
+                except Exception:
+                    keywords = []
+
             draft = PostContent(
                 title=row["rewritten_title"],
                 body=row["rewritten_body"],
                 hashtags=hashtags,
                 source_url=source_url,
                 image_prompts=image_prompts,
+                keywords=keywords,
             )
 
         image = None
@@ -77,6 +86,7 @@ class SqliteJobRepository(IJobRepository):
         async with get_db_connection(self.db_path) as db:
             hashtags_json = json.dumps(job.draft.hashtags) if job.draft else None
             image_prompts_json = json.dumps(job.draft.image_prompts) if job.draft else None
+            keywords_json = json.dumps(job.draft.keywords) if job.draft else None
             rewritten_title = job.draft.title if job.draft else None
             rewritten_body = job.draft.body if job.draft else None
             image_url = job.image.image_url if job.image else None
@@ -91,9 +101,9 @@ class SqliteJobRepository(IJobRepository):
                     id, user_id, source_input, is_url, content_hash, tone,
                     extracted_title, extracted_body, rewritten_title, rewritten_body,
                     hashtags_json, image_url, image_prompt, is_image_placeholder, source_url,
-                    image_prompts_json,
+                    image_prompts_json, keywords_json,
                     status, channel_message_id, error_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     user_id=excluded.user_id,
                     source_input=excluded.source_input,
@@ -110,6 +120,7 @@ class SqliteJobRepository(IJobRepository):
                     is_image_placeholder=excluded.is_image_placeholder,
                     source_url=excluded.source_url,
                     image_prompts_json=excluded.image_prompts_json,
+                    keywords_json=excluded.keywords_json,
                     status=excluded.status,
                     channel_message_id=excluded.channel_message_id,
                     error_message=excluded.error_message,
@@ -132,6 +143,7 @@ class SqliteJobRepository(IJobRepository):
                     is_image_placeholder,
                     source_url,
                     image_prompts_json,
+                    keywords_json,
                     job.status.value,
                     job.channel_message_id,
                     job.error_message,

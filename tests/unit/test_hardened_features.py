@@ -15,11 +15,12 @@ from src.presentation.keyboards import (
 
 
 def test_robust_json_parser_clean():
-    payload = '{"title": "Valid Title", "body": "Clean body", "hashtags": ["#tag1", "#tag2"], "image_prompt": "Clean prompt"}'
+    payload = '{"title": "Valid Title", "body": "Clean body", "hashtags": ["#tag1", "#tag2"], "keywords": ["USB key", "AES-256"], "image_prompt": "Clean prompt"}'
     res = RobustJsonParser.parse(payload)
     assert res["title"] == "Valid Title"
     assert res["body"] == "Clean body"
     assert res["hashtags"] == ["#tag1", "#tag2"]
+    assert res["keywords"] == ["USB key", "AES-256"]
     assert res["image_prompt"] == "Clean prompt"
 
 

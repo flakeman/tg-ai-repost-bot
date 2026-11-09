@@ -73,7 +73,7 @@
 - **Database:** SQLite 3 with WAL mode via `aiosqlite` with strict connection pooling & `busy_timeout = 5000`
 - **AI Clients:** OpenAI SDK (OpenAI API, DeepSeek API, and OpenAI-compatible gateways like `cheapvibecode.ru`)
 - **Scraper:** `trafilatura` + `httpx` + `beautifulsoup4` + `Jina Reader API fallback`
-- **Image Generation & Storage:** Двухуровневая генерация обложек: основной DALL-E/OpenAI rotator (`gpt-image-2`, `dall-e-3`) + автономный `PollinationsImageGenerator` (Flux/SD) fallback (ADR-018) с динамическим `seed` и гарантированной генерацией новой ИИ-обложки для каждого материала (ADR-019); хранилище `storage/images/` с TTL-очисткой 14 дней.
+- **Image Generation & Storage:** Двухуровневая генерация обложек: основной DALL-E/OpenAI rotator (`gpt-image-2`, `dall-e-3`) + автономный `PollinationsImageGenerator` (Flux/SD) fallback (ADR-018) с динамическим `seed`, гарантированной генерацией новой ИИ-обложки для каждого материала (ADR-019) и обязательным использованием ключевых сущностей, технологий и объектов из статьи (ADR-020); хранилище `storage/images/` с TTL-очисткой 14 дней.
 - **Testing:** `pytest`, `pytest-asyncio`, `pytest-mock`
 
 ---
@@ -132,7 +132,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON publishing_jobs(status);
 3. Бот создает `PublishingJob` в статусе `PENDING` и немедленно отправляет ответ: *"⏳ Принял в работу!"*.
 4. **Extractor** извлекает чистый заголовок и тело статьи (статус `EXTRACTING`). При наличии ссылки на Telegram-пост экстрактор считывает виджет, находит первоисточник (Хабр и др.) и скачивает полный текст оригинальной статьи.
 5. **Rewriter** отправляет промпт через настроенный шлюз (`cheapvibecode.ru` / OpenAI / DeepSeek), получая: Заголовок, Тело, Хэштеги и 4 креативных варианта обложки (статус `REWRITING`).
-6. **Image Generator** синтезирует уникальное изображение через `gpt-image-2` / DALL-E 3 / Pollinations (статус `GENERATING_IMAGE`), используя динамический seed и промпт от LLM (ADR-019), сохраняет файл локально в `storage/images/`.
+6. **Image Generator** синтезирует уникальное изображение через `gpt-image-2` / DALL-E 3 / Pollinations (статус `GENERATING_IMAGE`), используя динамический seed и промпт от LLM с обязательным внедрением ключевых терминов, сущностей и технологий статьи (ADR-019, ADR-020), сохраняет файл локально в `storage/images/`.
 7. Бот переходит в статус `AWAITING_APPROVAL` и присылает готовый черновик в ЛС автору единым сообщением: фото с текстом поста в подписи и прикрепленными кнопками модерации (ADR-010). Вторым информационным сообщением бот отправляет 4 варианта концептов обложки.
 8. Автор нажимает «🚀 Опубликовать».
 9. Бот публикует фото с текстом поста в подписи единым сообщением в канал/группу, переводит задачу в `PUBLISHED` и подтверждает публикацию.

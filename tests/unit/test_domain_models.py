@@ -23,9 +23,11 @@ def test_post_content_hashtags_normalization():
         title="Тест",
         body="Тело поста",
         hashtags=["ai-news", "#AI_News", "Tech", "#Tech", "crypto"],
+        keywords="USB security, AES-256, reverse engineering",
     )
     # Checks deduplication case-insensitively and proper leading #
     assert draft.hashtags == ["#ai_news", "#Tech", "#crypto"]
+    assert draft.keywords == ["USB security", "AES-256", "reverse engineering"]
     rendered = draft.render_post()
     assert "#ai_news #Tech #crypto" in rendered
 

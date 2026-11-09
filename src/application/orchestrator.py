@@ -44,6 +44,7 @@ class PipelineOrchestrator:
             hashtags=combined,
             source_url=source_url or draft.source_url,
             image_prompts=draft.image_prompts,
+            keywords=draft.keywords,
         )
 
     async def submit_content(
@@ -143,6 +144,11 @@ class PipelineOrchestrator:
             fallback_existing_image = job.image if (job.image and job.image.image_url and not job.image.is_placeholder) else None
             prompt_for_image = img_prompt or (draft.image_prompts[0] if draft.image_prompts else None) or f"Editorial illustration for news: {draft.title}"
 
+            # Integrate article keys (ADR-020)
+            if draft.keywords and not any(k.lower() in prompt_for_image.lower() for k in draft.keywords):
+                keys_str = ", ".join(draft.keywords)
+                prompt_for_image = f"{prompt_for_image}. Key visual elements: {keys_str}"
+
             try:
                 image_asset = await self.image_generator.generate(prompt_for_image)
             except Exception as img_err:
@@ -214,6 +220,11 @@ class PipelineOrchestrator:
                 prompt = f"Editorial illustration for news: {job.draft.title}"
         else:
             prompt = f"Editorial illustration for news: {job.draft.title}"
+
+        # Integrate article keys (ADR-020)
+        if job.draft.keywords and not any(k.lower() in prompt.lower() for k in job.draft.keywords):
+            keys_str = ", ".join(job.draft.keywords)
+            prompt = f"{prompt}. Key visual elements: {keys_str}"
 
         image_asset = await self.image_generator.generate(prompt)
         if not image_asset.prompt_used or image_asset.prompt_used == "image prompt":
