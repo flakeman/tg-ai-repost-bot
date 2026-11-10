@@ -18,7 +18,7 @@ from src.presentation.keyboards import (
     build_settings_tone_keyboard,
     build_settings_model_keyboard,
 )
-from src.presentation.text_utils import split_telegram_message
+from src.presentation.text_utils import split_telegram_message, format_progress_message
 
 logger = logging.getLogger(__name__)
 
@@ -382,7 +382,7 @@ async def handle_incoming_content(
         return
 
     status_msg = await message.reply(
-        "⏳ <b>Принял в работу!</b>\nЗадача добавлена в очередь генерации поста...",
+        format_progress_message(5, "Постановка задачи в очередь конвейера..."),
         parse_mode=ParseMode.HTML,
     )
 
@@ -390,7 +390,16 @@ async def handle_incoming_content(
         await queue_worker.enqueue(job.id, message.chat.id, status_msg.message_id)
     else:
         # Direct execution fallback (e.g. in test environments without queue worker)
-        processed_job = await orchestrator.process_pipeline(job.id)
+        async def direct_progress(percent: int, stage_text: str) -> None:
+            try:
+                await status_msg.edit_text(
+                    format_progress_message(percent, stage_text),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                pass
+
+        processed_job = await orchestrator.process_pipeline(job.id, progress_callback=direct_progress)
         if processed_job.error_message:
             await status_msg.edit_text(
                 f"❌ <b>Произошла ошибка при обработке:</b>\n<code>{processed_job.error_message}</code>",
@@ -428,9 +437,24 @@ async def handle_regen_image_callback(
 ):
     job_id = callback.data.split(":")[2]
     await callback.answer("Перегенерирую обложку...")
-    status_msg = await callback.message.answer("🎨 Генерирую новое изображение...")
+    status_msg = await callback.message.answer(
+        format_progress_message(10, "🎨 Подготовка к перегенерации обложки..."),
+        parse_mode=ParseMode.HTML,
+    )
+
+    async def update_image_progress(percent: int, stage_text: str) -> None:
+        try:
+            await status_msg.edit_text(
+                format_progress_message(percent, stage_text),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
     try:
-        updated_job = await orchestrator.regenerate_image(job_id)
+        updated_job = await orchestrator.regenerate_image(
+            job_id, progress_callback=update_image_progress
+        )
         try:
             await status_msg.delete()
         except Exception:
@@ -446,9 +470,24 @@ async def handle_regen_text_callback(
 ):
     job_id = callback.data.split(":")[2]
     await callback.answer("Переписываю текст...")
-    status_msg = await callback.message.answer("✍️ Нейросеть готовит новый вариант текста...")
+    status_msg = await callback.message.answer(
+        format_progress_message(10, "✍️ Подготовка к повторному рерайту текста..."),
+        parse_mode=ParseMode.HTML,
+    )
+
+    async def update_text_progress(percent: int, stage_text: str) -> None:
+        try:
+            await status_msg.edit_text(
+                format_progress_message(percent, stage_text),
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+
     try:
-        updated_job = await orchestrator.rewrite_text(job_id)
+        updated_job = await orchestrator.rewrite_text(
+            job_id, progress_callback=update_text_progress
+        )
         try:
             await status_msg.delete()
         except Exception:

@@ -1,6 +1,6 @@
 import html
 import re
-from typing import List
+from typing import List, Optional
 
 
 def strip_html_tags(text: str) -> str:
@@ -132,3 +132,29 @@ def split_telegram_message(text: str, max_length: int = 4000) -> List[str]:
         chunks.append(rem)
 
     return chunks
+
+
+def render_progress_bar(percent: int, length: int = 10) -> str:
+    """
+    Renders an ASCII/Unicode progress bar: e.g. [▓▓▓▓▓░░░░░] 50%
+    Clamps percent between 0 and 100.
+    """
+    clamped = max(0, min(100, int(percent)))
+    filled_len = round((clamped / 100.0) * length)
+    empty_len = length - filled_len
+    bar = "▓" * filled_len + "░" * empty_len
+    return f"[{bar}] {clamped}%"
+
+
+def format_progress_message(percent: int, stage_text: str, details: Optional[str] = None) -> str:
+    """
+    Formats standardized HTML message for pipeline progress updates.
+    Encloses progress bar in <code> tags for consistent monospaced rendering.
+    """
+    bar = render_progress_bar(percent)
+    msg = f"⏳ <b>Обработка публикации:</b>\n<code>{bar}</code>\n\n📍 <i>{stage_text}</i>"
+    if details:
+        escaped_details = html.escape(details)
+        msg += f"\n<code>{escaped_details}</code>"
+    return msg
+

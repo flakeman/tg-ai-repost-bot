@@ -2,6 +2,8 @@ from src.presentation.text_utils import (
     split_telegram_message,
     convert_markdown_to_telegram_html,
     strip_html_tags,
+    render_progress_bar,
+    format_progress_message,
 )
 
 
@@ -54,3 +56,25 @@ def test_split_telegram_message_hard_cut():
     assert len(chunks) == 3
     assert all(len(c) <= 50 for c in chunks)
     assert "".join(chunks) == long_unbroken
+
+
+def test_render_progress_bar():
+    assert render_progress_bar(0) == "[░░░░░░░░░░] 0%"
+    assert render_progress_bar(20) == "[▓▓░░░░░░░░] 20%"
+    assert render_progress_bar(50) == "[▓▓▓▓▓░░░░░] 50%"
+    assert render_progress_bar(80) == "[▓▓▓▓▓▓▓▓░░] 80%"
+    assert render_progress_bar(100) == "[▓▓▓▓▓▓▓▓▓▓] 100%"
+    # Clamping
+    assert render_progress_bar(-15) == "[░░░░░░░░░░] 0%"
+    assert render_progress_bar(150) == "[▓▓▓▓▓▓▓▓▓▓] 100%"
+
+
+def test_format_progress_message():
+    msg = format_progress_message(50, "Адаптация текста")
+    assert "<code>[▓▓▓▓▓░░░░░] 50%</code>" in msg
+    assert "Адаптация текста" in msg
+
+    msg_with_details = format_progress_message(75, "Генерация арта", details="Промпт <test> & more")
+    assert "<code>[▓▓▓▓▓▓▓▓░░] 75%</code>" in msg_with_details
+    assert "Промпт &lt;test&gt; &amp; more" in msg_with_details
+

@@ -218,3 +218,47 @@ async def test_image_generation_integrates_article_keywords(setup_pipeline):
     assert "AES-256" in regen_prompt
     assert "Key visual elements:" in regen_prompt
 
+
+@pytest.mark.asyncio
+async def test_pipeline_progress_callbacks_invocation_and_resilience(setup_pipeline):
+    orchestrator, repo, _ = setup_pipeline
+    job, _ = await orchestrator.submit_content(user_id=1, source_input="https://techcrunch.com/article-progress-test")
+
+    recorded_steps = []
+
+    async def mock_callback(percent: int, stage_text: str):
+        recorded_steps.append((percent, stage_text))
+
+    processed_job = await orchestrator.process_pipeline(job.id, progress_callback=mock_callback)
+
+    assert processed_job.status == JobStatus.AWAITING_APPROVAL
+    assert len(recorded_steps) == 4
+    percents = [s[0] for s in recorded_steps]
+    assert percents == [15, 45, 75, 95]
+
+    # Test regenerate_image progress callback
+    regen_steps = []
+    async def regen_callback(percent: int, stage_text: str):
+        regen_steps.append((percent, stage_text))
+
+    await orchestrator.regenerate_image(processed_job.id, progress_callback=regen_callback)
+    assert len(regen_steps) == 3
+    assert [s[0] for s in regen_steps] == [25, 65, 95]
+
+    # Test rewrite_text progress callback
+    rewrite_steps = []
+    async def rewrite_callback(percent: int, stage_text: str):
+        rewrite_steps.append((percent, stage_text))
+
+    await orchestrator.rewrite_text(processed_job.id, progress_callback=rewrite_callback)
+    assert len(rewrite_steps) == 4
+    assert [s[0] for s in rewrite_steps] == [25, 60, 85, 95]
+
+    # Test resilience: callback that raises Exception must not fail the pipeline
+    async def failing_callback(percent: int, stage_text: str):
+        raise RuntimeError("Telegram API connection reset")
+
+    resilient_job = await orchestrator.process_pipeline(job.id, progress_callback=failing_callback)
+    assert resilient_job.status == JobStatus.AWAITING_APPROVAL
+
+

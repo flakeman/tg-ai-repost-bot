@@ -6,6 +6,7 @@ from aiogram import Bot
 from aiogram.enums import ParseMode
 from src.application.orchestrator import PipelineOrchestrator
 from src.presentation.preview import send_draft_preview
+from src.presentation.text_utils import format_progress_message
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +61,23 @@ class PipelineQueueWorker:
                 break
 
             logger.info("Worker #%d processing job %s for chat %s...", worker_id, item.job_id, item.chat_id)
+            async def update_progress(percent: int, stage_text: str) -> None:
+                if item.status_message_id:
+                    try:
+                        text = format_progress_message(percent, stage_text)
+                        await self.bot.edit_message_text(
+                            chat_id=item.chat_id,
+                            message_id=item.status_message_id,
+                            text=text,
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except Exception as edit_err:
+                        logger.debug("Failed to update progress for job %s: %s", item.job_id, edit_err)
+
             try:
-                processed_job = await self.orchestrator.process_pipeline(item.job_id)
+                processed_job = await self.orchestrator.process_pipeline(
+                    item.job_id, progress_callback=update_progress
+                )
 
                 if processed_job.error_message:
                     if item.status_message_id:

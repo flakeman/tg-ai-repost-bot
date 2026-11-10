@@ -134,7 +134,8 @@ async def test_pipeline_queue_worker():
     await worker.queue.join()
     await worker.stop()
 
-    orchestrator_mock.process_pipeline.assert_called_once_with(job.id)
+    from unittest.mock import ANY
+    orchestrator_mock.process_pipeline.assert_called_once_with(job.id, progress_callback=ANY)
     bot_mock.delete_message.assert_called_once_with(chat_id=123, message_id=555)
 
 

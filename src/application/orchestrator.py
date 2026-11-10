@@ -1,6 +1,6 @@
 from __future__ import annotations
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Callable, Awaitable
 from src.domain.interfaces import (
     IJobRepository,
     IArticleExtractor,
@@ -11,6 +11,19 @@ from src.domain.interfaces import (
 from src.domain.models import PublishingJob, Tone, JobStatus, compute_content_hash, ImageAsset, PostContent
 
 logger = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[int, str], Awaitable[None]]
+
+
+async def _notify_progress(
+    callback: Optional[ProgressCallback], percent: int, stage: str
+) -> None:
+    if callback:
+        try:
+            await callback(percent, stage)
+        except Exception as exc:
+            logger.debug("Progress callback failed (non-fatal): %s", exc)
+
 
 
 class PipelineOrchestrator:
@@ -76,7 +89,11 @@ class PipelineOrchestrator:
         await self.repository.save(job)
         return job, False
 
-    async def process_pipeline(self, job_id: str) -> PublishingJob:
+    async def process_pipeline(
+        self,
+        job_id: str,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> PublishingJob:
         """
         Executes the asynchronous pipeline steps:
         1. Extract content (if URL) or prepare raw text.
@@ -90,6 +107,7 @@ class PipelineOrchestrator:
 
         try:
             # Step 1: Content Extraction
+            await _notify_progress(progress_callback, 15, "📥 Загрузка и извлечение содержимого...")
             job.start_extracting()
             await self.repository.save(job)
 
@@ -122,6 +140,7 @@ class PipelineOrchestrator:
             await self.repository.save(job)
 
             # Step 2: LLM Rewriting
+            await _notify_progress(progress_callback, 45, "✍️ Адаптация и рерайт текста нейросетью...")
             job.status = JobStatus.REWRITING
             await self.repository.save(job)
 
@@ -138,6 +157,7 @@ class PipelineOrchestrator:
             await self.repository.save(job)
 
             # Step 3: Image Generation (Always generate fresh AI artwork, ADR-019)
+            await _notify_progress(progress_callback, 75, "🎨 Генерация уникальной ИИ-обложки...")
             job.status = JobStatus.GENERATING_IMAGE
             await self.repository.save(job)
 
@@ -162,6 +182,7 @@ class PipelineOrchestrator:
             job.set_image(image_asset)
 
             # Step 4: Ready for Human Approval
+            await _notify_progress(progress_callback, 95, "✨ Финализация и подготовка карточки...")
             job.mark_awaiting_approval()
             await self.repository.save(job)
             return job
@@ -196,7 +217,12 @@ class PipelineOrchestrator:
         await self.repository.save(job)
         return job, msg_id
 
-    async def regenerate_image(self, job_id: str, custom_prompt: Optional[str] = None) -> PublishingJob:
+    async def regenerate_image(
+        self,
+        job_id: str,
+        custom_prompt: Optional[str] = None,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> PublishingJob:
         """
         Regenerates cover image for an awaiting approval job.
         Cycles through draft prompts or selects a fresh prompt if none specified (ADR-019).
@@ -204,6 +230,8 @@ class PipelineOrchestrator:
         job = await self.repository.get_by_id(job_id)
         if not job or not job.draft:
             raise ValueError("Invalid job or draft missing")
+
+        await _notify_progress(progress_callback, 25, "🎨 Анализ концепта и подготовка промпта...")
 
         if custom_prompt:
             prompt = custom_prompt
@@ -226,15 +254,23 @@ class PipelineOrchestrator:
             keys_str = ", ".join(job.draft.keywords)
             prompt = f"{prompt}. Key visual elements: {keys_str}"
 
+        await _notify_progress(progress_callback, 65, "🖼️ Отрисовка нового нейросетевого арта...")
         image_asset = await self.image_generator.generate(prompt)
         if not image_asset.prompt_used or image_asset.prompt_used == "image prompt":
             image_asset.prompt_used = prompt
+
+        await _notify_progress(progress_callback, 95, "✨ Финализация и сохранение обложки...")
         job.set_image(image_asset)
         job.status = JobStatus.AWAITING_APPROVAL
         await self.repository.save(job)
         return job
 
-    async def rewrite_text(self, job_id: str, new_tone: Optional[Tone] = None) -> PublishingJob:
+    async def rewrite_text(
+        self,
+        job_id: str,
+        new_tone: Optional[Tone] = None,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> PublishingJob:
         """
         Re-executes LLM rewriting for an awaiting approval job.
         """
@@ -242,19 +278,25 @@ class PipelineOrchestrator:
         if not job:
             raise ValueError("Job not found")
 
+        await _notify_progress(progress_callback, 25, "🧠 Анализ статьи и формирование промпта...")
+
         if new_tone:
             job.tone = new_tone
 
         body = job.extracted_body or job.source_input
         title_hint = job.extracted_title
 
+        await _notify_progress(progress_callback, 60, "✍️ Генерация нового варианта текста...")
         if hasattr(self.rewriter, "rewrite_with_prompt"):
             draft, _ = await self.rewriter.rewrite_with_prompt(body, job.tone, title_hint=title_hint)
         else:
             draft = await self.rewriter.rewrite(body, job.tone, title_hint=title_hint)
 
+        await _notify_progress(progress_callback, 85, "🏷️ Обогащение хэштегами и форматирование...")
         source_url = job.draft.source_url if (job.draft and job.draft.source_url) else (job.source_input if job.is_url else None)
         draft = self._enrich_hashtags(draft, source_url=source_url)
+
+        await _notify_progress(progress_callback, 95, "✨ Подготовка обновленной карточки...")
         job.set_draft(draft)
         job.status = JobStatus.AWAITING_APPROVAL
         await self.repository.save(job)
