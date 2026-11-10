@@ -73,7 +73,7 @@
 - **Database:** SQLite 3 with WAL mode via `aiosqlite` with strict connection pooling & `busy_timeout = 5000`
 - **AI Clients:** OpenAI SDK (OpenAI API, DeepSeek API, and OpenAI-compatible gateways like `cheapvibecode.ru`)
 - **Scraper:** `trafilatura` + `httpx` + `beautifulsoup4` + `Jina Reader API fallback`
-- **Image Generation & Storage:** Двухуровневая генерация обложек: основной DALL-E/OpenAI rotator (`gpt-image-2`, `dall-e-3`) + автономный `PollinationsImageGenerator` (Flux/SD) fallback (ADR-018) с динамическим `seed`, гарантированной генерацией новой ИИ-обложки для каждого материала (ADR-019) и обязательным использованием ключевых сущностей, технологий и объектов из статьи (ADR-020); хранилище `storage/images/` с TTL-очисткой 14 дней.
+- **Image Generation & Storage:** Двухуровневая генерация обложек: основной DALL-E/OpenAI rotator (`gpt-image-2`, `dall-e-3`) + автономный `PollinationsImageGenerator` (Flux/SD) fallback (ADR-018) с динамическим `seed`, гарантированной генерацией новой ИИ-обложки для каждого материала (ADR-019), обязательным использованием ключевых сущностей из статьи (ADR-020) и устойчивостью к rate-limit 402/503 с парсингом `Retry after` и ротацией моделей (ADR-023); хранилище `storage/images/` с TTL-очисткой 14 дней.
 - **Testing:** `pytest`, `pytest-asyncio`, `pytest-mock`
 
 ---

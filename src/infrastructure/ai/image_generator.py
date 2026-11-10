@@ -152,6 +152,9 @@ class PollinationsImageGenerator(IImageGenerator):
     async def generate(self, prompt: str) -> ImageAsset:
         import random
         import urllib.parse
+        import re
+        import asyncio
+
         raw_prompt = prompt.strip()
         sanitized = sanitize_image_prompt(raw_prompt)
         if "Style:" not in sanitized and self.style_modifier:
@@ -160,24 +163,54 @@ class PollinationsImageGenerator(IImageGenerator):
             full_prompt = sanitized
 
         encoded_prompt = urllib.parse.quote(full_prompt[:500])
-        seed = random.randint(1, 2147483647)
-        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true&seed={seed}&model=flux"
+        candidate_models = ["flux", "turbo", ""]
+        max_attempts = 3
 
-        logger.info("Generating fallback image via Pollinations AI (seed: %d)...", seed)
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.get(url, follow_redirects=True)
-                if resp.status_code == 200 and len(resp.content) > 1000:
-                    filename = f"gen_pol_{uuid.uuid4().hex[:12]}.jpg"
-                    filepath = os.path.join(self.images_dir, filename)
-                    with open(filepath, "wb") as f:
-                        f.write(resp.content)
-                    logger.info("Pollinations image successfully generated and saved: %s", filepath)
-                    return ImageAsset(image_url=filepath, prompt_used=full_prompt, is_placeholder=False)
-                else:
-                    logger.warning("Pollinations returned status %d (length %d)", resp.status_code, len(resp.content))
-        except Exception as exc:
-            logger.error("Pollinations image generation failed: %s", exc)
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            for attempt in range(max_attempts):
+                seed = random.randint(1, 2147483647)
+                model_param = candidate_models[attempt % len(candidate_models)]
+                url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true&seed={seed}"
+                if model_param:
+                    url += f"&model={model_param}"
+
+                logger.info(
+                    "Generating image via Pollinations AI (attempt %d/%d, model: %s, seed: %d)...",
+                    attempt + 1,
+                    max_attempts,
+                    model_param or "default",
+                    seed,
+                )
+                try:
+                    resp = await client.get(url, follow_redirects=True)
+                    if resp.status_code == 200 and len(resp.content) > 1000:
+                        filename = f"gen_pol_{uuid.uuid4().hex[:12]}.jpg"
+                        filepath = os.path.join(self.images_dir, filename)
+                        with open(filepath, "wb") as f:
+                            f.write(resp.content)
+                        logger.info("Pollinations image successfully generated and saved: %s", filepath)
+                        return ImageAsset(image_url=filepath, prompt_used=full_prompt, is_placeholder=False)
+
+                    # Handle 402 / 503 rate limits and temporary service overloads
+                    if resp.status_code in (402, 503):
+                        wait_match = re.search(r"Retry after (\d+)s", resp.text)
+                        wait_s = int(wait_match.group(1)) if wait_match else (2 * (attempt + 1))
+                        wait_s = min(wait_s, 15)
+                        logger.warning(
+                            "Pollinations rate limited (status %d). Waiting %d seconds before retry...",
+                            resp.status_code,
+                            wait_s,
+                        )
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep(wait_s + 0.5)
+                            continue
+                    else:
+                        logger.warning("Pollinations returned status %d (length %d)", resp.status_code, len(resp.content))
+
+                except Exception as exc:
+                    logger.warning("Pollinations attempt %d failed: %s", attempt + 1, exc)
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(2)
 
         return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
 

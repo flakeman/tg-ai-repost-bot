@@ -177,3 +177,50 @@ async def test_pollinations_image_generator_success(tmp_path, monkeypatch):
     assert asset.image_url is not None
     assert os.path.exists(asset.image_url)
 
+
+@pytest.mark.asyncio
+async def test_pollinations_image_generator_rate_limit_recovery_402(tmp_path, monkeypatch):
+    """
+    ADR-023: Tests that PollinationsImageGenerator extracts 'Retry after Xs' on 402/503,
+    waits, and successfully recovers on subsequent attempt.
+    """
+    from src.infrastructure.ai.image_generator import PollinationsImageGenerator
+    import httpx
+
+    fake_bytes = b"\xff\xd8\xff" + b"0" * 2000
+    call_count = 0
+
+    class MockResponse402:
+        status_code = 402
+        text = '{"status":402,"error":{"code":"FREE_LIMIT","message":"Free limit reached: 1 image every 45 seconds per IP. Retry after 0s..."}}'
+        content = text.encode()
+
+    class MockResponse200:
+        status_code = 200
+        content = fake_bytes
+
+    class MockRateLimitClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def get(self, url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return MockResponse402()
+            return MockResponse200()
+
+    monkeypatch.setattr(httpx, "AsyncClient", MockRateLimitClient)
+
+    gen = PollinationsImageGenerator(images_dir=str(tmp_path / "images"))
+    asset = await gen.generate("AI robotics editorial")
+
+    assert call_count == 2
+    assert asset.is_placeholder is False
+    assert asset.image_url is not None
+    assert os.path.exists(asset.image_url)
+
+
