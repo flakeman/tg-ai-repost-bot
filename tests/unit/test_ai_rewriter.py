@@ -41,6 +41,45 @@ async def test_openai_rewriter_success():
 
 
 @pytest.mark.asyncio
+async def test_openai_rewriter_model_cascade_fallback():
+    client_mock = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = json.dumps({
+        "title": "Успешный рерайт через запасную модель",
+        "body": "Текст сгенерирован запасной моделью каскада.",
+        "hashtags": ["#AI"],
+        "keywords": ["AI chip"],
+        "image_prompt": "quantum chip render",
+        "image_prompts": ["Prompt 1"],
+    })
+
+    # First call (primary gpt-5.6-terra) fails with 503 listing_unavailable
+    # Second call (cascade fallback) succeeds
+    client_mock.chat.completions.create = AsyncMock(
+        side_effect=[
+            RuntimeError("Error code: 503 - fixed_merchant_marketplace_listing_unavailable"),
+            MagicMock(choices=[mock_choice]),
+        ]
+    )
+
+    rewriter = OpenAIRewriter(
+        api_key="test-key",
+        model="gpt-5.6-terra",
+        fallback_models=["gpt-6-sol"],
+        client=client_mock,
+    )
+    draft, img_prompt = await rewriter.rewrite_with_prompt("Текст новости", Tone.DYNAMIC)
+
+    assert draft.title == "Успешный рерайт через запасную модель"
+    assert "запасной моделью" in draft.body
+    assert client_mock.chat.completions.create.call_count == 2
+    first_call_model = client_mock.chat.completions.create.call_args_list[0][1]["model"]
+    second_call_model = client_mock.chat.completions.create.call_args_list[1][1]["model"]
+    assert first_call_model == "gpt-5.6-terra"
+    assert second_call_model == "gpt-6-sol"
+
+
+@pytest.mark.asyncio
 async def test_dalle_image_generator_b64_json(tmp_path):
     import base64
     client_mock = MagicMock()

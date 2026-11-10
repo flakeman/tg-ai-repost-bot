@@ -1,11 +1,14 @@
 import json
+import logging
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from openai import AsyncOpenAI
 from src.domain.interfaces import ILLMRewriter
 from src.domain.models import Tone, PostContent
 from src.infrastructure.ai.prompts import build_system_prompt, build_user_prompt
 from src.infrastructure.ai.json_parser import RobustJsonParser
+
+logger = logging.getLogger(__name__)
 
 
 class RewriterError(Exception):
@@ -20,8 +23,10 @@ class OpenAIRewriter(ILLMRewriter):
         model: str = "gpt-4o-mini",
         base_url: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
+        fallback_models: Optional[List[str]] = None,
     ):
         self.model = model
+        self.fallback_models = fallback_models
         self.client = client or AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     async def rewrite_with_prompt(
@@ -30,19 +35,52 @@ class OpenAIRewriter(ILLMRewriter):
         system_prompt = build_system_prompt(tone)
         user_prompt = build_user_prompt(raw_text, title_hint)
 
-        try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.7,
-                response_format={"type": "json_object"},
-            )
-            content = response.choices[0].message.content or ""
-        except Exception as exc:
-            raise RewriterError(f"LLM API error ({self.model}): {exc}") from exc
+        candidate_models = [self.model]
+        fallbacks = self.fallback_models or [
+            "gpt-6-sol",
+            "gpt-5.6-sol",
+            "deepseek-v4.1-flash-1017",
+            "claude-haiku-5-5",
+            "qwen3.8-flash",
+            "gpt-4o-mini",
+        ]
+        for m in fallbacks:
+            if m not in candidate_models:
+                candidate_models.append(m)
+
+        content = ""
+        last_error = None
+        for model_to_try in candidate_models:
+            try:
+                logger.info("Attempting LLM rewrite with model %s...", model_to_try)
+                response = await self.client.chat.completions.create(
+                    model=model_to_try,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.7,
+                    response_format={"type": "json_object"},
+                )
+                content = response.choices[0].message.content or ""
+                if content:
+                    if model_to_try != self.model:
+                        logger.warning(
+                            "Primary model %s failed, successfully rewrote post using fallback model %s",
+                            self.model,
+                            model_to_try,
+                        )
+                    break
+            except Exception as exc:
+                last_error = exc
+                err_str = str(exc)
+                logger.warning("LLM model %s failed: %s. Trying next candidate...", model_to_try, err_str[:200])
+                if "invalid_api_key" in err_str or "Unauthorized" in err_str or "401" in err_str:
+                    raise RewriterError(f"Authentication failed: {exc}") from exc
+                continue
+
+        if not content:
+            raise RewriterError(f"LLM API error ({self.model}): {last_error}") from last_error
 
         parsed = self._parse_json_payload(content)
         title = parsed.get("title", "Без заголовка").strip()
