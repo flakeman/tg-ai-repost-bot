@@ -334,13 +334,18 @@ async def handle_incoming_content(
         )
         return
 
-    # If URL is the sole content or user forwarded a short post with a URL
-    if target_url and (raw_content == target_url or not raw_content or len(raw_content) < 150):
+    import re
+    text_without_url = re.sub(r"https?://\S+", "", raw_content).strip()
+
+    if target_url and not text_without_url:
         content = target_url
-    elif target_url:
-        content = f"{target_url} {raw_content}"
+        effective_source_url = target_url
+    elif target_url and len(text_without_url) < 60:
+        content = target_url
+        effective_source_url = target_url
     else:
         content = raw_content
+        effective_source_url = target_url
 
     active_tone = Tone(settings.default_tone)
     if settings_repo:
@@ -348,7 +353,9 @@ async def handle_incoming_content(
         active_tone = user_settings.preferred_tone
 
     # Ingestion & Dedup check
-    job, is_duplicate = await orchestrator.submit_content(user_id, content, active_tone)
+    job, is_duplicate = await orchestrator.submit_content(
+        user_id, content, active_tone, source_url=effective_source_url
+    )
 
     if not is_duplicate and message.photo:
         largest_photo = message.photo[-1]

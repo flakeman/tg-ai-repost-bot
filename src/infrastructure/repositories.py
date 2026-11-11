@@ -12,6 +12,13 @@ class SqliteJobRepository(IJobRepository):
         self.db_path = db_path
 
     def _row_to_job(self, row: aiosqlite.Row) -> PublishingJob:
+        # Retrieve source_url
+        source_url = None
+        if "source_url" in row.keys() and row["source_url"]:
+            source_url = row["source_url"]
+        elif row["is_url"]:
+            source_url = row["source_input"]
+
         draft = None
         if row["rewritten_title"] and row["rewritten_body"]:
             hashtags = []
@@ -20,13 +27,6 @@ class SqliteJobRepository(IJobRepository):
                     hashtags = json.loads(row["hashtags_json"])
                 except Exception:
                     hashtags = []
-
-            # Retrieve source_url
-            source_url = None
-            if "source_url" in row.keys() and row["source_url"]:
-                source_url = row["source_url"]
-            elif row["is_url"]:
-                source_url = row["source_input"]
 
             # Retrieve image_prompts
             image_prompts = []
@@ -77,6 +77,7 @@ class SqliteJobRepository(IJobRepository):
             image=image,
             status=JobStatus(row["status"]),
             channel_message_id=row["channel_message_id"],
+            source_url=source_url,
             error_message=row["error_message"],
             created_at=created_at,
             updated_at=updated_at,
@@ -93,7 +94,7 @@ class SqliteJobRepository(IJobRepository):
             image_prompt = job.image.prompt_used if job.image else None
             is_image_placeholder = 1 if (job.image and job.image.is_placeholder) else 0
 
-            source_url = job.draft.source_url if (job.draft and job.draft.source_url) else (job.source_input if job.is_url else None)
+            source_url = (job.draft.source_url if (job.draft and job.draft.source_url) else job.source_url) or (job.source_input if job.is_url else None)
 
             await db.execute(
                 """

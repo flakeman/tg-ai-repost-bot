@@ -61,7 +61,11 @@ class PipelineOrchestrator:
         )
 
     async def submit_content(
-        self, user_id: int, source_input: str, tone: Tone = Tone.DYNAMIC
+        self,
+        user_id: int,
+        source_input: str,
+        tone: Tone = Tone.DYNAMIC,
+        source_url: Optional[str] = None,
     ) -> Tuple[PublishingJob, bool]:
         """
         Submits content into the system, checks for duplicate by hash.
@@ -80,12 +84,17 @@ class PipelineOrchestrator:
                 existing.status = JobStatus.PENDING
                 existing.error_message = None
                 existing.tone = tone
+                if source_url:
+                    existing.source_url = source_url
                 await self.repository.save(existing)
                 return existing, False
+            if source_url and not existing.source_url:
+                existing.source_url = source_url
+                await self.repository.save(existing)
             logger.info("Found existing job %s for content hash %s", existing.id, c_hash)
             return existing, True
 
-        job = PublishingJob.create(user_id=user_id, source_input=source_input, tone=tone)
+        job = PublishingJob.create(user_id=user_id, source_input=source_input, tone=tone, source_url=source_url)
         await self.repository.save(job)
         return job, False
 
@@ -111,29 +120,57 @@ class PipelineOrchestrator:
             job.start_extracting()
             await self.repository.save(job)
 
-            resolved_url = None
+            resolved_url = job.source_url
             if job.is_url:
                 try:
-                    title, body, resolved_url = await self.extractor.extract_with_url(job.source_input)
+                    title, body, ext_url = await self.extractor.extract_with_url(job.source_input)
+                    resolved_url = ext_url or resolved_url or job.source_input
                 except (AttributeError, TypeError):
                     title, body = await self.extractor.extract(job.source_input)
-                    resolved_url = job.source_input
+                    resolved_url = resolved_url or job.source_input
             else:
                 import re
+                text_without_urls = re.sub(r"https?://\S+", "", job.source_input).strip()
                 found = re.search(r"https?://\S+", job.source_input)
-                if found:
+
+                if found and not resolved_url:
+                    resolved_url = found.group(0).rstrip(".,;!?)")
+
+                # If user already provided substantial text (forwarded post or custom news), use it directly
+                if len(text_without_urls) >= 70:
+                    lines = [ln.strip() for ln in text_without_urls.split("\n") if ln.strip()]
+                    title = lines[0][:80] if lines else "Пользовательский материал"
+                    body = job.source_input
+                elif found:
                     extracted_target = found.group(0).rstrip(".,;!?)")
                     try:
                         try:
-                            title, body, resolved_url = await self.extractor.extract_with_url(extracted_target)
+                            title, body, ext_url = await self.extractor.extract_with_url(extracted_target)
+                            resolved_url = ext_url or resolved_url
                         except (AttributeError, TypeError):
                             title, body = await self.extractor.extract(extracted_target)
-                            resolved_url = extracted_target
+
+                        # Validate that extracted text is a substantive article, not boilerplate/SPA shell
+                        is_boilerplate = any(
+                            b_phrase in body.lower()
+                            for b_phrase in [
+                                "current system does not support",
+                                "official app provided by",
+                                "download app",
+                                "please enable javascript",
+                                "enable javascript to continue",
+                            ]
+                        )
+                        if len(body.strip()) < 100 or is_boilerplate:
+                            logger.warning("Extracted page appears to be boilerplate/SPA shell, reverting to source text.")
+                            title = "Пользовательский материал"
+                            body = job.source_input
                     except Exception:
                         title = "Пользовательский материал"
                         body = job.source_input
                 else:
-                    title = "Пользовательский материал"
+                    lines = [ln.strip() for ln in job.source_input.split("\n") if ln.strip()]
+                    title = lines[0][:80] if lines else "Пользовательский материал"
                     body = job.source_input
 
             job.set_extracted_content(title=title, body=body)
@@ -152,7 +189,7 @@ class PipelineOrchestrator:
                 draft = await self.rewriter.rewrite(body, job.tone, title_hint=title)
                 img_prompt = None
 
-            draft = self._enrich_hashtags(draft, source_url=resolved_url)
+            draft = self._enrich_hashtags(draft, source_url=resolved_url or job.source_url)
             job.set_draft(draft)
             await self.repository.save(job)
 

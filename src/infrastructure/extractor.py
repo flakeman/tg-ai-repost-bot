@@ -27,7 +27,7 @@ class TrafilaturaExtractor(IArticleExtractor):
     async def _fetch_via_jina(self, url: str) -> Optional[Tuple[str, str, str]]:
         try:
             jina_url = f"https://r.jina.ai/{url}"
-            async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, trust_env=False) as client:
                 resp = await client.get(jina_url, headers={"X-No-Cache": "true", "Accept": "text/plain"})
                 if resp.status_code == 200 and len(resp.text) > 50:
                     lines = [ln.strip() for ln in resp.text.split("\n") if ln.strip()]
@@ -58,24 +58,33 @@ class TrafilaturaExtractor(IArticleExtractor):
             embed_url = f"https://t.me/{channel}/{msg_id}?embed=1"
             direct_url = f"https://t.me/{channel}/{msg_id}"
             try:
-                async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, headers=self.headers) as client:
+                async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, headers=self.headers, trust_env=False) as client:
                     resp = await client.get(embed_url)
                     if resp.status_code == 200:
                         soup = BeautifulSoup(resp.text, "html.parser")
                         msg_node = soup.find(class_="tgme_widget_message_text")
                         if msg_node:
-                            # Check for external source links inside the telegram message
+                            post_text = msg_node.get_text("\n", strip=True)
+                            external_links = []
                             for a in msg_node.find_all("a", href=True):
                                 href = a["href"].strip()
                                 if href.startswith("http") and not any(d in href.lower() for d in ["t.me/", "telegram.org", "telegram.me"]):
-                                    # Follow and extract primary article source!
-                                    return await self.extract_with_url(href)
+                                    external_links.append(href)
 
-                            # If no external link found, use the telegram post text directly
-                            post_text = msg_node.get_text("\n", strip=True)
+                            # If post is short (<150 chars) and contains an external link, try following the link
+                            if len(post_text) < 150 and external_links:
+                                try:
+                                    t, b, u = await self.extract_with_url(external_links[0])
+                                    if len(b.strip()) >= 100 and not any(bp in b.lower() for bp in ["download app", "system not support"]):
+                                        return t, b, u
+                                except Exception:
+                                    pass
+
+                            # Use the telegram post text directly if substantial or link extraction yielded boilerplate
                             lines = [ln.strip() for ln in post_text.split("\n") if ln.strip()]
                             title = lines[0][:80] if lines else "Новость из Telegram"
-                            return title, post_text, url
+                            source_link = external_links[0] if external_links else url
+                            return title, post_text, source_link
 
                     # Fallback for video/media/unsupported posts where embed=1 does not show tgme_widget_message_text
                     resp_direct = await client.get(direct_url)
@@ -85,26 +94,32 @@ class TrafilaturaExtractor(IArticleExtractor):
                         if og_desc and og_desc.get("content"):
                             post_text = og_desc["content"].strip()
                             if len(post_text) > 10:
-                                # Check if post_text contains an external link to extract
                                 link_match = re.search(r"https?://[^\s]+", post_text)
+                                ext_link = None
                                 if link_match:
-                                    ext_link = link_match.group(0).rstrip(".,;!?)")
-                                    if not any(d in ext_link.lower() for d in ["t.me/", "telegram.org", "telegram.me"]):
-                                        try:
-                                            return await self.extract_with_url(ext_link)
-                                        except Exception:
-                                            pass
+                                    candidate = link_match.group(0).rstrip(".,;!?)")
+                                    if not any(d in candidate.lower() for d in ["t.me/", "telegram.org", "telegram.me"]):
+                                        ext_link = candidate
+
+                                if len(post_text) < 150 and ext_link:
+                                    try:
+                                        t, b, u = await self.extract_with_url(ext_link)
+                                        if len(b.strip()) >= 100 and not any(bp in b.lower() for bp in ["download app", "system not support"]):
+                                            return t, b, u
+                                    except Exception:
+                                        pass
+
                                 lines = [ln.strip() for ln in post_text.split("\n") if ln.strip()]
                                 og_title = soup_direct.find("meta", property="og:title")
                                 title = lines[0][:80] if lines else (og_title["content"] if og_title else "Новость из Telegram")
-                                return title, post_text, url
+                                return title, post_text, ext_link or url
             except Exception:
                 pass  # Fallback to normal URL fetching
 
         html = ""
         final_url = url
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, headers=self.headers) as client:
+            async with httpx.AsyncClient(timeout=self.timeout_sec, follow_redirects=True, headers=self.headers, trust_env=False) as client:
                 response = await client.get(url)
                 if response.status_code < 400:
                     html = response.text

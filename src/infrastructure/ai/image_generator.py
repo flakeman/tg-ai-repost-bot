@@ -133,6 +133,33 @@ class DalleImageGenerator(IImageGenerator):
         return ImageAsset(image_url=None, prompt_used=full_prompt, is_placeholder=True)
 
 
+def remove_pollinations_watermark(image_bytes: bytes) -> bytes:
+    """
+    Pollinations AI stamps a branding logo/watermark in the bottom-right corner
+    (within bottom ~6.5% of height). This function crops that bottom slice
+    and resizes the image back to its original dimensions cleanly.
+    """
+    try:
+        from PIL import Image
+        import io
+        im = Image.open(io.BytesIO(image_bytes))
+        w, h = im.size
+        # The watermark is in the bottom right corner, within the bottom ~6.5% of image height
+        bottom_cut = max(48, int(h * 0.065))
+        cropped = im.crop((0, 0, w, h - bottom_cut))
+        res = cropped.resize((w, h), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        save_format = im.format or "JPEG"
+        if save_format.upper() in ("JPG", "JPEG"):
+            res.save(out, format="JPEG", quality=95)
+        else:
+            res.save(out, format=save_format)
+        return out.getvalue()
+    except Exception as exc:
+        logger.warning("Could not auto-crop watermark from image: %s", exc)
+        return image_bytes
+
+
 class PollinationsImageGenerator(IImageGenerator):
     """
     Autonomous fallback image generator using Pollinations.ai (Flux/SD).
@@ -166,7 +193,7 @@ class PollinationsImageGenerator(IImageGenerator):
         candidate_models = ["flux", "turbo", ""]
         max_attempts = 3
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
             for attempt in range(max_attempts):
                 seed = random.randint(1, 2147483647)
                 model_param = candidate_models[attempt % len(candidate_models)]
@@ -184,11 +211,12 @@ class PollinationsImageGenerator(IImageGenerator):
                 try:
                     resp = await client.get(url, follow_redirects=True)
                     if resp.status_code == 200 and len(resp.content) > 1000:
+                        cleaned_bytes = remove_pollinations_watermark(resp.content)
                         filename = f"gen_pol_{uuid.uuid4().hex[:12]}.jpg"
                         filepath = os.path.join(self.images_dir, filename)
                         with open(filepath, "wb") as f:
-                            f.write(resp.content)
-                        logger.info("Pollinations image successfully generated and saved: %s", filepath)
+                            f.write(cleaned_bytes)
+                        logger.info("Pollinations image successfully generated and saved (watermark stripped): %s", filepath)
                         return ImageAsset(image_url=filepath, prompt_used=full_prompt, is_placeholder=False)
 
                     # Handle 402 / 503 rate limits and temporary service overloads

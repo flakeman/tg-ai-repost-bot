@@ -156,3 +156,79 @@ def test_settings_keyboards():
     model_cbs = [btn.callback_data for row in kb_models.inline_keyboard for btn in row]
     assert "cb:set:model:gpt-image-2.5-flare" in model_cbs
     assert "cb:set:main" in model_cbs
+
+
+def test_remove_pollinations_watermark():
+    from PIL import Image, ImageDraw
+    import io
+    from src.infrastructure.ai.image_generator import remove_pollinations_watermark
+
+    # Create dummy image with watermark in bottom right
+    img = Image.new("RGB", (768, 768), color=(30, 30, 30))
+    draw = ImageDraw.Draw(img)
+    # Draw fake watermark text/pixels
+    draw.rectangle([768 - 150, 768 - 30, 768 - 10, 768 - 10], fill=(255, 255, 255))
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    orig_bytes = buf.getvalue()
+
+    cleaned_bytes = remove_pollinations_watermark(orig_bytes)
+    assert cleaned_bytes is not None
+
+    cleaned_img = Image.open(io.BytesIO(cleaned_bytes))
+    assert cleaned_img.size == (768, 768)
+
+    # Check bottom right pixels where watermark was drawn: should no longer be pure white
+    corner_pixel = cleaned_img.getpixel((768 - 20, 768 - 20))
+    # Original was (255, 255, 255), cleaned should be background (~30, 30, 30)
+    assert corner_pixel[0] < 100 and corner_pixel[1] < 100 and corner_pixel[2] < 100
+
+
+@pytest.mark.asyncio
+async def test_pipeline_preserves_substantial_text_with_link():
+    from src.application.orchestrator import PipelineOrchestrator
+    from src.domain.interfaces import IJobRepository, IArticleExtractor, ILLMRewriter, IImageGenerator, IPublisher
+    from src.domain.models import PublishingJob, Tone, PostContent, ImageAsset
+
+    repo_mock = AsyncMock(spec=IJobRepository)
+    extractor_mock = AsyncMock(spec=IArticleExtractor)
+    # Extractor returns mobile app download boilerplate if called
+    extractor_mock.extract_with_url = AsyncMock(return_value=("Qwen", "Official App provided by Qwen Download App Current System does not Support", "https://chat.qwen.ai/"))
+    
+    rewriter_mock = AsyncMock(spec=ILLMRewriter)
+    rewriter_mock.rewrite_with_prompt = AsyncMock(return_value=(
+        PostContent(title="Qwen 4 Preview", body="Alibaba released Qwen 4", hashtags=["#AI"]),
+        "Illustration of Qwen4 coding AI"
+    ))
+    
+    img_gen_mock = AsyncMock(spec=IImageGenerator)
+    img_gen_mock.generate = AsyncMock(return_value=ImageAsset(image_url="storage/images/test.jpg"))
+    publisher_mock = AsyncMock(spec=IPublisher)
+
+    orchestrator = PipelineOrchestrator(
+        repository=repo_mock,
+        extractor=extractor_mock,
+        rewriter=rewriter_mock,
+        image_generator=img_gen_mock,
+        publisher=publisher_mock,
+    )
+
+    sample_post = (
+        "https://chat.qwen.ai/ Alibaba открыла доступ к Qwen4-Max-Preview, предварительной версии новой модели Qwen 4.\n\n"
+        "Попробовать её уже можно в Qwen Chat, режиме Agent Mode и через Alibaba Token Plan.\n\n"
+        "Модель предназначена для сложных задач программирования и профессиональной разработки ПО."
+    )
+
+    job = PublishingJob.create(user_id=1, source_input=sample_post, tone=Tone.DYNAMIC)
+    repo_mock.get_by_id = AsyncMock(return_value=job)
+    repo_mock.save = AsyncMock()
+
+    processed = await orchestrator.process_pipeline(job.id)
+
+    # Must preserve the actual post body, NOT replace it with Qwen mobile app download splash!
+    assert "Alibaba открыла доступ к Qwen4-Max-Preview" in processed.extracted_body
+    assert "Current System does not Support" not in processed.extracted_body
+    # Rewriter must have been called with the actual post body
+    call_args = rewriter_mock.rewrite_with_prompt.call_args[0]
+    assert "Alibaba открыла доступ" in call_args[0]

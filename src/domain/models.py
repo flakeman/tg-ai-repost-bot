@@ -184,12 +184,19 @@ class PublishingJob(BaseModel):
     image: Optional[ImageAsset] = None
     status: JobStatus = JobStatus.PENDING
     channel_message_id: Optional[int] = None
+    source_url: Optional[str] = None
     error_message: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @classmethod
-    def create(cls, user_id: int, source_input: str, tone: Tone = Tone.DYNAMIC) -> PublishingJob:
+    def create(
+        cls,
+        user_id: int,
+        source_input: str,
+        tone: Tone = Tone.DYNAMIC,
+        source_url: Optional[str] = None,
+    ) -> PublishingJob:
         stripped = source_input.strip()
         is_url = (stripped.startswith("http://") or stripped.startswith("https://")) and not any(c in stripped for c in " \t\r\n")
         c_hash = compute_content_hash(stripped)
@@ -200,6 +207,7 @@ class PublishingJob(BaseModel):
             content_hash=c_hash,
             tone=tone,
             status=JobStatus.PENDING,
+            source_url=source_url,
         )
 
     def _touch(self) -> None:
